@@ -1,0 +1,132 @@
+# vue-style-runtime
+
+Vue 2.7 / Vue 3 运行时组件样式注入与 Scoped CSS 改写（0.5.0）。
+
+没有 SFC 编译时，组件里的 `<style scoped>` 不会在构建期被改写。本包在浏览器端完成这件事：把 `styles` 字符串注入 `<head>`，按实例数引用计数，并在挂载/更新时按 VNode 归属给元素打 `data-scope-*` 属性，实现 scoped 隔离。
+
+**不是** SFC 编译器：不解析 `.vue`、不编译模板，也不编译 `lang="scss"` 等预处理语法。scoped 标记依赖 Vue 内部字段，见「已知限制」。
+
+## 安装与用法
+
+作为本地依赖安装（`file:` 或本地路径），运行环境需 Vue 2.7 或 Vue 3（peerDependency `^2.7.0 || ^3.0.0`）：
+
+```json
+{ "dependencies": { "vue-style-runtime": "file:../vue-style-runtime" } }
+```
+
+```js
+import styleMixin from 'vue-style-runtime';
+
+export default {
+  name: 'AppDialog',
+  mixins: [styleMixin],
+
+  // 必须是组件 options 上的非空字符串，created 时只读一次
+  styles: /* HTML */ `
+    <style scoped>
+      .app-dialog {
+        padding: 12px;
+      }
+      .app-dialog :deep(.el-button) {
+        margin: 0;
+      }
+    </style>
+    <link rel="stylesheet" href="/plugins/app-dialog/style.css" />
+  `,
+
+  template: /* HTML */ `<div class="app-dialog"><slot /></div>`,
+};
+```
+
+`styles` 顶层只识别 `<style>` 与 `<link>`：`<style>` 带 `scoped` 属性才改写，普通 `<style>` 原样注入；`<link>` 的 `rel` 按空白分词后包含 `stylesheet` 才注入；其它标签与其它 `rel` 一律忽略。
+
+## scoped 选择器
+
+改写方式是给选择器追加 `[data-scope-uid_N]`，插槽目标用 `[data-scope-uid_N-s]`。它是属性选择器，不是 `:where()`，会提高优先级。
+
+| 输入                        | 输出                           | 实际行为                                                                          |
+| --------------------------- | ------------------------------ | --------------------------------------------------------------------------------- |
+| `.a > .b .c`                | `.a > .b .c[data-scope-uid_N]` | 复合选择器与组合器保留，属性追加在最后一个复合选择器末尾                          |
+| `.a, .b`                    | `.a[attr], .b[attr]`           | 顶层逗号由 `scopeSelectorList` 拆开逐条改写，再以 `, ` 连接                       |
+| `.a:is(.b, .c) .d`          | `.a:is(.b, .c) .d[attr]`       | `:is()` / `:where()` / `:not()` 括号内的逗号不切分                                |
+| `[data-label="a,b"] .x`     | `[data-label="a,b"] .x[attr]`  | 属性选择器、引号与注释内的逗号不切分；已存在同名属性时不重复追加                  |
+| `.\31 23 .x`                | `.\31 23 .x[attr]`             | 引号外的 CSS 转义整体跳过，不参与切分                                             |
+| `&:hover`                   | `&:hover[attr]`                | 原生 `&` 只改写当前复合选择器；嵌套块 body 原样交给浏览器 CSS nesting，不二次改写 |
+| `.a > :deep(.b)`            | `.a[attr] > .b`                | 只作用域化左侧，`>` 组合器保留                                                    |
+| `.a :deep(.b, .c)`          | `.a[attr] .b, .a[attr] .c`     | `:deep()` 多参数展开为多条                                                        |
+| `.a :slotted(.b)`           | `.a .b[attr-s]`                | 只给插槽目标加 `-s`，外层不加普通 scope                                           |
+| `.a :global(.x)`            | `.a .x`                        | 本项目自定义语义（非 Vue 官方特性）：保留外层文本、不做任何作用域化               |
+| `.a >>> .b`、`.a /deep/ .b` | `.a[attr] .b`                  | 先归一化成 `:deep()`；`.a > /deep/ .b` → `.a[attr] > .b`                          |
+| `.a:hover::before`          | `.a:hover[attr]::before`       | 属性插在双冒号伪元素之前；单冒号旧写法 `:before` 不特殊处理                       |
+
+## at-rule
+
+- 分组规则内部的选择器照常作用域化，并递归处理嵌套：`@media`、`@supports`、`@layer`、`@container`、`@starting-style`、`@scope`（代码内另有 `@document`）。
+- `@keyframes` 整块跳过，`from` / `to` / 百分比选择器不追加属性；`@-webkit-`、`@-moz-`、`@-o-` 以及任意 `@-*-keyframes` 同样跳过。
+- 语句型 `@import`、`@charset`（以 `;` 结束）原样保留，其后的规则继续作用域化。
+- 其它 at-rule 声明块（`@font-face`、`@page`、`@property` 等）原样保留，不转换。
+- 非法或残缺 CSS（找不到 `{`、大括号不配对）不抛错，从问题位置起原样保留。
+
+## 作用域归属
+
+`mounted` / `updated` 时遍历实例渲染树（`subTree ?? _vnode`）：
+
+- 本实例创建的元素 → `[data-scope-uid_N]`。
+- 模板中的子组件根节点 → 父组件 scope 必加；若该组件自身又是其父组件的直接渲染根（自身组件 VNode 等于父组件渲染树），继续加祖父 scope，逐层向上。
+- 祖先组件传入的插槽内容 → `[data-scope-uid_N-s]`。
+- 子组件内部的普通元素不加当前组件 scope。
+- 最后对 `$el` 兜底打属性；Fragment 的注释锚点因 `nodeType !== 1` 被忽略。
+
+Fragment 单根：过滤非元素/组件节点（Vue 3 中 `type` 为 `Symbol` 的子节点、Vue 2 `isComment`）后只剩一个有效节点才作为继承根，多根不继承。
+
+Vue 2.7 / Vue 3 字段兼容：`subTree ?? _vnode`、`component ?? componentInstance`、`vnode ?? $vnode`、`ctx ?? context`、`parent ?? $parent`、`proxy ?? instance`、`el ?? elm`；`unmounted` 与 `destroyed` 同时注册。
+
+遍历用 `WeakSet` / `Set` 防循环，选择器递归最多 32 层。
+
+## 生命周期与样式注入
+
+- `created`：读 `$options.styles`，非空字符串才继续；按组件身份分配 `uid_N`；`addStyles` 注入成功（返回非 `null`）才登记实例。
+- `mounted` / `updated`：`applyScopeAttr`。未登记，或该组件样式不含 `scoped` 时直接返回；否则遍历渲染树并给 `$el` 兜底。
+- `unmounted` / `destroyed`：`removeInstanceStyles`，实例计数减一；归零时移除该组件的全部样式节点并删除登记，未归零只更新计数。
+- 注入：用 `document.createElement('template')` 解析 `styles`，遍历 `content.children`。scoped `<style>` 克隆后去掉 `scoped`、补 `type="text/css"`、加 `data-vue-style-scoped="data-scope-uid_N"`，`textContent` 换成改写后的 CSS；非 scoped 节点原样使用。
+- 每个节点追加 class `uid_N` 和 `data-vue-component-instances="<当前实例数>"`，再 `document.head.appendChild`。构建/追加过程中任意一步出错，移除本次已追加节点并抛出原错误。
+- 组件身份优先取 `$.type`（Vue 3），其次 `constructor.options`（Vue 2），最后取 `$options` 的原型；同一身份的所有实例共享一组节点。无 `document` 环境，或解析后没有可注入节点时，`addStyles` 返回 `null`。
+
+## 导出
+
+默认导出与具名导出 `styleMixin` 是同一个对象：`{ created, mounted, updated, unmounted, destroyed }`。
+
+| 导出                                                                 | 用途                                                                   |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `addScopeAttr(selector, attrSelector)`                               | 给单个复合选择器追加属性，幂等，伪元素前插                             |
+| `addStyles(name, styleSource)`                                       | 注入或复用样式节点，返回 `{ count, nodes, scoped, attr }` 或 `null`    |
+| `applyScope`                                                         | `applyScopeAttr` 的别名                                                |
+| `applyScopeAttr(instance)`                                           | 按实例登记信息标记其渲染树与 `$el`                                     |
+| `markScopedVNodeTree(root, self, scopeAttribute)`                    | 以 `attr` / `attr-s` 标记整棵 VNode 树                                 |
+| `markScopedVNodes(root, self, attr, slottedAttr, mark)`              | 同上，可自定义 slotted 属性与标记函数                                  |
+| `processStyleBlock(node, name)`                                      | 克隆 scoped `<style>` 并改写 CSS，补 `type` 与 `data-vue-style-scoped` |
+| `scopeCss(css, scopeAttribute)`                                      | 对整段 CSS 做作用域改写                                                |
+| `scopeSelector(selector, attrSelector, slottedAttrSelector)`         | 改写单个选择器（含历史 deep 归一化）                                   |
+| `scopeSelectorList(selectorText, attrSelector, slottedAttrSelector)` | 按顶层逗号拆分并逐条改写                                               |
+| `splitSelectors(input, delimiter = ',')`                             | 顶层切分，感知字符串、注释、括号、属性选择器与转义                     |
+| `styleMixin`                                                         | mixin 对象本身                                                         |
+| `transformRules(css, attrSelector, slottedAttrSelector)`             | 逐规则改写，处理分组 at-rule                                           |
+
+## 已知限制
+
+- 只扫描 `styles` 顶层直接子元素（`template.content.children`）：顶层文本与注释丢弃，包在其它元素内的 `<style>` / `<link>` 不会被识别。
+- `<link>` 不等待加载，首屏可能出现无样式闪烁。
+- 原生 `&` 依赖浏览器 CSS nesting，最低版本：Chrome 112+ / Safari 17.2+ / Firefox 121+；更低版本下嵌套规则不生效。
+- 依赖 Vue 非公开字段：`$.type`、`subTree` / `_vnode`、`component` / `componentInstance`、`vnode` / `$vnode`、`ctx` / `context`、`parent` / `$parent`、`proxy`、`el` / `elm`、`ssContent` / `ssFallback`、`$el`。升级 Vue 大版本需回归 scoped 用例。
+- `styles` 在 `created` 只读一次，实例运行期修改不生效；每次新建 options 对象会得到新的组件身份并重复注入。
+- 样式节点被外部移除后不会恢复；实例卸载也不会清除元素上已打的属性，被手工复用的节点会保留旧属性。
+- 追加的属性选择器会提高优先级，没有 `:where()` 降权。
+- 不做预处理：`lang="scss"` 等属性会保留，但内容不会被编译。
+
+## 测试
+
+```bash
+npm test   # node --test "tests/**/*.test.js"，jsdom 环境
+```
+
+当前 49 条，覆盖注入与计数、回滚、选择器改写、at-rule、转义与容错、Vue 2.7 / Vue 3 VNode 归属与生命周期。`tests/` 与 jsdom 只用于开发；发布 `files` 为 `index.js`、`README.md`、`index.html`。

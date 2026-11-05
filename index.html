@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>vue-style-runtime 测试（Vue 2.7 / Vue 3）</title>
+    <!--
+    ESM import 不能用 file:// 打开，需静态服务器：
+    在本目录下执行 npx serve .，然后访问 /
+  --></head>
+  <body>
+    <h1>vue-style-runtime 测试</h1>
+
+    <h2>Vue 2.7</h2>
+    <div id="app2">
+      <demo-comp v-for="n in instances" :key="n"></demo-comp>
+    </div>
+    <ul id="results2"></ul>
+
+    <h2>Vue 3</h2>
+    <div id="app3">
+      <demo-comp v-for="n in instances" :key="n"></demo-comp>
+    </div>
+    <ul id="results3"></ul>
+
+    <script type="module">
+      import Vue2 from 'https://esm.sh/vue@2.7.16/dist/vue.esm.js';
+      import { createApp, nextTick } from 'https://esm.sh/vue@3.5.44/dist/vue.esm-bundler.js';
+      import styleMixin from './index.js';
+
+      const warnings = [];
+      const rawWarn = console.warn;
+      console.warn = (...args) => {
+        warnings.push(args.join(' '));
+        rawWarn(...args);
+      };
+
+      const styleNodes = () =>
+        document.head.querySelectorAll('style[data-vue-component-instances]');
+      const counter = () => {
+        const nodes = styleNodes();
+        return nodes.length > 0
+          ? Number(nodes[0].getAttribute('data-vue-component-instances'))
+          : null;
+      };
+
+      function createAssert(el) {
+        const results = [];
+        return (name, pass) => {
+          results.push({ name, pass });
+          el.innerHTML = results
+            .map(
+              (r) =>
+                `<li style="color: ${r.pass ? 'green' : 'red'}">${r.pass ? '✓' : '✗'} ${r.name}</li>`,
+            )
+            .join('');
+        };
+      }
+
+      const DemoComp = {
+        name: 'DemoComp',
+        mixins: [styleMixin],
+        styles: `<style>.demo-box { color: red; }</style>`,
+        template: '<div class="demo-box">demo</div>',
+      };
+
+      // 两个版本串行执行：每轮结束时实例全部卸载、节点清零，互不干扰。
+      async function run(assert, vm, tick) {
+        vm.instances.push(1, 2, 3);
+        await tick();
+        assert('3 个实例共享 1 个样式节点', styleNodes().length === 1);
+        assert('计数 = 3', counter() === 3);
+
+        vm.instances.pop();
+        await tick();
+        assert('卸载 1 个实例后计数 = 2', counter() === 2);
+
+        vm.instances.splice(0);
+        await tick();
+        assert('全部卸载后节点移除', styleNodes().length === 0);
+
+        vm.instances.push(4, 5);
+        await tick();
+        assert('重新挂载后重建 1 个节点', styleNodes().length === 1);
+        assert('重新挂载后计数 = 2', counter() === 2);
+
+        vm.instances.splice(0);
+        await tick();
+        assert('最终全部卸载后节点移除', styleNodes().length === 0);
+
+        assert('无 destroyed 相关警告', !warnings.some((w) => /destroyed/i.test(w)));
+      }
+
+      const vm2 = new Vue2({
+        el: '#app2',
+        components: { DemoComp },
+        data: { instances: [] },
+      });
+      await run(createAssert(document.getElementById('results2')), vm2, Vue2.nextTick);
+
+      const vm3 = createApp({
+        components: { DemoComp },
+        data: () => ({ instances: [] }),
+      }).mount('#app3');
+      await run(createAssert(document.getElementById('results3')), vm3, nextTick);
+    </script>
+  </body>
+</html>
