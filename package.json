@@ -6,6 +6,10 @@
     "type": "git",
     "url": "https://github.com/nbaxp/vue-style-runtime.git"
   },
+  "homepage": "https://github.com/nbaxp/vue-style-runtime#readme",
+  "bugs": {
+    "url": "https://github.com/nbaxp/vue-style-runtime/issues"
+  },
   "description": "A lightweight browser-side Vue 2.7 and Vue 3 runtime for component style injection and scoped CSS transformation.",
   "type": "module",
   "exports": {
@@ -25,12 +29,10 @@
     "scoped",
     "no-bundler"
   ],
-  "peerDependencies": {
-    "vue": "^2.7.0 || ^3.0.0"
-  },
   "license": "MIT",
   "scripts": {
     "test": "node --test \"tests/**/*.test.js\"",
+    "prepublishOnly": "npm test",
     "serve": "npx serve ."
   },
   "devDependencies": {

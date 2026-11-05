@@ -8,10 +8,10 @@ Vue 2.7 / Vue 3 运行时组件样式注入与 Scoped CSS 改写（0.5.0）。
 
 ## 安装与用法
 
-作为本地依赖安装（`file:` 或本地路径），运行环境需 Vue 2.7 或 Vue 3（peerDependency `^2.7.0 || ^3.0.0`）：
+通过 npm 安装，宿主需自行提供 Vue 2.7 或 3.x：
 
-```json
-{ "dependencies": { "vue-style-runtime": "file:../vue-style-runtime" } }
+```bash
+npm i vue-style-runtime
 ```
 
 ```js
@@ -130,3 +130,10 @@ npm test   # node --test "tests/**/*.test.js"，jsdom 环境
 ```
 
 当前 49 条，覆盖注入与计数、回滚、选择器改写、at-rule、转义与容错、Vue 2.7 / Vue 3 VNode 归属与生命周期。`tests/` 与 jsdom 只用于开发；发布 `files` 为 `index.js`、`README.md`、`index.html`。
+
+## 发布
+
+1. 首次发布：包在 npm 上尚不存在，无法配置 Trusted Publisher；本地 `npm login` 后执行 `npm publish`（需 npm 账号 2FA）。
+2. 首次发布完成后，到 npm 包页面 Settings → Trusted publishing 绑定本仓库与工作流（`.github/workflows/publish.yml`），此后由 CI 通过 OIDC 发布，无需长期 token。
+3. 后续版本：修改 `package.json` 的 `version` 并提交，然后 `git tag vX.Y.Z && git push origin vX.Y.Z`；工作流执行测试 → 校验标签与版本 → `npm publish` → 创建同名 GitHub Release 并附 `.tgz`。
+4. 工作流也可手工触发，默认 `dry_run=true` 只执行 `npm publish --dry-run`；手动正式发布须选择 `v*` Tag 并设置 `dry_run=false`。
