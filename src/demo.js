@@ -7,7 +7,7 @@ import {
   computed,
   onMounted,
   onBeforeUnmount,
-} from 'https://esm.sh/vue@3.5.44/dist/vue.esm-browser.js';
+} from 'vue/dist/vue.esm-bundler.js';
 
 // 源码以 data: 模块执行，模块内无法解析相对说明符，
 // 所以预设里写带 origin 的绝对地址；dev 下指向源码，preview/gh-pages 下指向 dist 产物。

@@ -169,11 +169,11 @@ import styleMixin from 'vue-style-runtime/index.min.js';
 
 根目录 [`index.html`](index.html) 是演示页：左侧编辑 SFC 风格的 `<template>` 与 `<style>`（可带 `scoped`），右侧约 300ms 防抖后真实重新挂载组件；页面底部实时展示 `<head>` 中被改写的 CSS、实例计数与作用域标记。内置“基础 scoped / `:deep` 穿透 / `:slotted` 插槽”预设，并提供“重新挂载”“卸载预览”验证 `unmounted` 清理。
 
-演示逻辑在 [`src/demo.js`](src/demo.js)，直接 `import styleMixin from '../index.js'`（源码入口，不是 dist）；Vue 通过 esm.sh 的完整浏览器构建引入（页面内可运行时编译模板）。本地开发与预览命令见「开发、构建与预览」，开发服务器默认 `http://localhost:5173/`。
+演示逻辑在 [`src/demo.js`](src/demo.js)，直接 `import styleMixin from '../index.js'`（源码入口，不是 dist）；Vue 来自本地开发依赖 `vue/dist/vue.esm-bundler.js`（完整构建，页面内可运行时编译模板），编译期特性开关在 `vite.config.js` 的 `define` 中声明。本地开发与预览命令见「开发、构建与预览」，开发服务器默认 `http://localhost:5173/`。
 
 ### GitHub Pages
 
-打 `v*` Tag 时，[`.github/workflows/pages.yml`](.github/workflows/pages.yml) 会安装依赖、执行 `npm run build:demo`，并通过 `peaceiris/actions-gh-pages` 把 `dist` 内容推送到 `gh-pages` 分支（该 action 默认生成 `.nojekyll`，避免 Vue 模板中的 `{{ }}` 被 Jekyll/Liquid 解析）。
+打 `v*` Tag 时，[`.github/workflows/pages.yml`](.github/workflows/pages.yml) 会安装依赖，执行 `npm run build:demo && npm run build:lib:unminified`（演示页运行时按同目录地址加载库入口，因此 `dist/index.js` 必须一并构建），并通过 `peaceiris/actions-gh-pages` 把 `dist` 内容推送到 `gh-pages` 分支（该 action 默认生成 `.nojekyll`，避免 Vue 模板中的 `{{ }}` 被 Jekyll/Liquid 解析）。
 
 1. 仓库 Settings → Pages → Build and deployment，Source 选择 **Deploy from a branch**。
 2. Branch 选 `gh-pages`，目录选 `/ (root)`，保存。

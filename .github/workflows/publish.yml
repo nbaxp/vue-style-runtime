@@ -103,7 +103,15 @@ jobs:
       - name: Pack tarball
         id: pack
         run: |
-          TARBALL="$(npm pack --silent)"
+          # prepack 会执行 Vite 构建，日志会混进 npm pack 的 stdout，
+          # 因此不解析命令输出，改为从固定目录里取唯一的 .tgz。
+          PACK_DIR="$(mktemp -d)"
+          npm pack --silent --pack-destination "$PACK_DIR"
+          TARBALL="$(find "$PACK_DIR" -maxdepth 1 -name '*.tgz' -print -quit)"
+          if [[ -z "$TARBALL" ]]; then
+            echo "::error::npm pack did not produce a tarball in $PACK_DIR"
+            exit 1
+          fi
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
           echo "Created $TARBALL"
 
