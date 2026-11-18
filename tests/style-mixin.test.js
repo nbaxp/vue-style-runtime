@@ -34,9 +34,9 @@ const injected = () => [...head.children];
 
 const counterOf = (node) => node.getAttribute(COUNTER);
 
-// Vue 3：同一组件定义的 options 是同一个对象。
+// Vue 3：mixin 的 this 是公开代理，$ 指向内部实例，$.type 是组件定义。
 const mount = (mixin, options) => {
-  const vm = { $options: options };
+  const vm = { $options: options, $: { type: options } };
   mixin.created.call(vm);
   return vm;
 };
@@ -92,14 +92,14 @@ test('同一组件类型的多实例共享节点，计数增减，归零才移�
   assert.equal(injected().length, 1);
   assert.equal(counterOf(injected()[0]), '1');
 
-  mixin.destroyed.call(b); // Vue 3 只会调 unmounted，Vue 2 只会调 destroyed
+  mixin.unmounted.call(b);
   assert.equal(injected().length, 0);
 });
 
 test('重复 created 不会重复计数（同一实例只登记一次）', async () => {
   const { default: mixin } = await freshMixin();
   const options = { styles: STYLE };
-  const vm = { $options: options };
+  const vm = { $options: options, $: { type: options } };
 
   mixin.created.call(vm);
   mixin.created.call(vm);
@@ -111,20 +111,7 @@ test('重复 created 不会重复计数（同一实例只登记一次）', async
   assert.equal(injected().length, 0);
 });
 
-test('Vue 2：$options 经 Object.create(Ctor.options) 时仍按组件身份共享', async () => {
-  const { default: mixin } = await freshMixin();
-  const CtorOptions = { styles: STYLE };
-
-  const a = mount(mixin, Object.create(CtorOptions));
-  const b = mount(mixin, Object.create(CtorOptions));
-
-  // 两个实例的 $options 不是同一个对象，但原型链指向同一组件定义。
-  assert.notEqual(a.$options, b.$options);
-  assert.equal(injected().length, 1);
-  assert.equal(counterOf(injected()[0]), '2');
-});
-
-test('不同组件类型各注入一份，互不影响', async () => {
+test('同一组件定义的多个实例共享节点，不同定义各注入一份', async () => {
   const { default: mixin } = await freshMixin();
 
   mount(mixin, { styles: `<style>.a{color:red}</style>` });
@@ -165,8 +152,7 @@ test('无 document 环境（SSR / Node）直接跳过且不抛错', async () => 
   teardownDom();
 
   const vm = mount(mixin, { styles: STYLE });
-  mixin.unmounted.call(vm); // Vue 3
-  mixin.destroyed.call(vm); // Vue 2
+  mixin.unmounted.call(vm);
 
   setupDom();
   assert.equal(injected().length, 0);

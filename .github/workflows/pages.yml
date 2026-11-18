@@ -1,0 +1,50 @@
+# GitHub Pages 工作流
+#
+# 推送 v* Tag（或手动触发）时，构建演示页，并把 dist 内容更新到 gh-pages 分支。
+# 前置配置：仓库 Settings → Pages → Source 选择 Deploy from a branch，
+# Branch 选 gh-pages，目录选 / (root)。
+#
+# 权限：contents: write 用于推送 gh-pages 分支。
+
+name: Pages
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build:demo
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages

@@ -50,18 +50,19 @@ jobs:
 
       - name: Check npm version
         run: |
-          node --version
-          npm --version
           node -e '
-          const [major, minor] = process.versions.node.split(".").map(Number);
-          if (major < 22 || (major === 22 && minor < 14)) {
-            throw new Error("Node.js 22.14.0 or later is required");
-          }
-          const [npmMajor, npmMinor] = require("child_process")
-            .execSync("npm --version", { encoding: "utf8" })
-            .trim().split(".").map(Number);
-          if (npmMajor < 11 || (npmMajor === 11 && npmMinor < 5)) {
-            throw new Error("npm CLI 11.5.1 or later is required");
+          const { execSync } = require("node:child_process");
+          const version = execSync("npm --version", { encoding: "utf8" }).trim();
+          const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+          const [npmMajor, npmMinor] = version.split(".").map(Number);
+          console.log(`Node.js ${process.versions.node}, npm ${version}`);
+          const ok =
+            (nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 14)) &&
+            (npmMajor > 11 || (npmMajor === 11 && npmMinor >= 5));
+          if (!ok) {
+            throw new Error(
+              `Node.js 22.14.0+ and npm 11.5.1+ are required (got Node.js ${process.versions.node}, npm ${version})`
+            );
           }
           '
 
@@ -96,9 +97,6 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Build
-        run: npm run build --if-present
-
       - name: Test
         run: npm test
 
@@ -110,6 +108,7 @@ jobs:
           echo "Created $TARBALL"
 
       - name: Upload tarball artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         uses: actions/upload-artifact@v4
         with:
           name: npm-tarball

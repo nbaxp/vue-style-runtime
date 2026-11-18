@@ -1,107 +1,252 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8" />
-    <title>vue-style-runtime 测试（Vue 2.7 / Vue 3）</title>
-    <!--
-    ESM import 不能用 file:// 打开，需静态服务器：
-    在本目录下执行 npx serve .，然后访问 /
-  --></head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>vue-style-runtime · 在线演示</title>
+    <script type="module" src="./src/demo.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #f5f6f8;
+        color: #1f2933;
+        font: 14px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      header {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 26px 24px 0;
+      }
+
+      header h1 {
+        margin: 0 0 4px;
+        font-size: 22px;
+      }
+
+      header p {
+        margin: 0;
+        color: #616e7c;
+      }
+
+      .layout {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 16px 24px 44px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+
+      @media (max-width: 960px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .panel {
+        background: #fff;
+        border: 1px solid #e4e7eb;
+        border-radius: 10px;
+        padding: 16px 18px;
+        min-width: 0;
+      }
+
+      .panel + .panel {
+        margin-top: 0;
+      }
+
+      .panel-head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+
+      .panel h2 {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .hint {
+        margin: 0 0 10px;
+        color: #616e7c;
+        font-size: 13px;
+      }
+
+      .hint code {
+        background: #eef1f4;
+        border-radius: 4px;
+        padding: 1px 5px;
+        font-size: 12px;
+      }
+
+      .presets {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      button {
+        border: 1px solid #cbd2d9;
+        background: #fff;
+        color: #1f2933;
+        border-radius: 6px;
+        padding: 5px 11px;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: #9aa5b1;
+        background: #f5f7fa;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 470px;
+        resize: vertical;
+        display: block;
+        padding: 12px 14px;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        background: #0f172a;
+        color: #e2e8f0;
+        font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        tab-size: 2;
+      }
+
+      textarea:focus {
+        outline: 2px solid #93c5fd;
+        outline-offset: 1px;
+      }
+
+      .preview {
+        min-height: 190px;
+        border: 1px dashed #cbd2d9;
+        border-radius: 8px;
+        background: #fbfcfd;
+        padding: 14px;
+      }
+
+      .status {
+        color: #616e7c;
+        font-size: 12.5px;
+      }
+
+      .status strong {
+        color: #1f2933;
+      }
+
+      .error {
+        margin: 10px 0 0;
+        padding: 10px 12px;
+        border: 1px solid #fca5a5;
+        border-radius: 8px;
+        background: #fef2f2;
+        color: #b91c1c;
+        font-size: 12.5px;
+        white-space: pre-wrap;
+      }
+
+      pre.css {
+        margin: 12px 0 0;
+        padding: 12px 14px;
+        max-height: 280px;
+        overflow: auto;
+        border-radius: 8px;
+        background: #0f172a;
+        color: #e2e8f0;
+        font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .empty {
+        color: #9aa5b1;
+        font-size: 13px;
+      }
+
+      .note {
+        margin: 10px 0 0;
+        color: #616e7c;
+        font-size: 12.5px;
+      }
+    </style>
+  </head>
   <body>
-    <h1>vue-style-runtime 测试</h1>
+    <div id="app">
+      <header>
+        <h1>vue-style-runtime</h1>
+        <p>Vue 3 运行时样式注入演示：左侧编辑，右侧实时重新挂载预览</p>
+      </header>
 
-    <h2>Vue 2.7</h2>
-    <div id="app2">
-      <demo-comp v-for="n in instances" :key="n"></demo-comp>
+      <div class="layout">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>编辑区</h2>
+            <span class="status">修改后约 300ms 自动重新挂载</span>
+          </div>
+          <p class="hint">
+            左侧是组件对象源码（<code>export default { ... }</code>），<code>styles</code> 为
+            含 <code>&lt;style&gt;</code> 的非空字符串。源码会原样编码成
+            <code>data:</code> 模块执行，因此只能用带 origin 的绝对地址 import
+            （<code>/index.js</code> 这类相对写法在 <code>data:</code> 模块里无法解析）；辅助子组件模块位于
+            <code>/demo-child.js</code>。修改后约 300ms 重新挂载。
+          </p>
+          <div class="presets">
+            <button type="button" @click="loadPreset(presets.basic)">基础 scoped</button>
+            <button type="button" @click="loadPreset(presets.deep)">:deep 穿透</button>
+            <button type="button" @click="loadPreset(presets.slotted)">:slotted 插槽</button>
+          </div>
+          <textarea v-model="source" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>预览区</h2>
+            <span class="status">已挂载第 <strong>{{ revision }}</strong> 次</span>
+          </div>
+          <div class="presets">
+            <button type="button" @click="remount">重新挂载</button>
+            <button type="button" @click="togglePreview">
+              {{ previewOn ? '卸载预览' : '挂载预览' }}
+            </button>
+            <button type="button" @click="apply">应用编辑</button>
+          </div>
+          <div class="preview">
+            <component v-if="previewOn" :is="view" :key="revision">
+              <span class="slot-item">来自父组件插槽的内容</span>
+            </component>
+            <p v-else class="empty">预览已卸载，head 中对应的样式节点也应被移除。</p>
+          </div>
+          <p v-if="error" class="error">{{ error }}</p>
+          <p class="note">
+            “卸载预览”会触发组件的 unmounted，下方样式节点数量应同步减少；“重新挂载”会重新注入。
+          </p>
+        </section>
+
+        <section class="panel" style="grid-column: 1 / -1">
+          <div class="panel-head">
+            <h2>head 中被改写后的样式节点</h2>
+            <span class="status">当前 <strong>{{ styleDump ? injected.length : 0 }}</strong> 个节点</span>
+          </div>
+          <p class="hint">
+            这里展示的是 vue-style-runtime 实际写入 <code>&lt;head&gt;</code> 的内容，包含 scoped 选择器改写、实例计数与作用域标记。
+          </p>
+          <pre v-if="styleDump" class="css">{{ styleDump }}</pre>
+          <p v-else class="empty">当前没有由 vue-style-runtime 注入的样式节点。</p>
+        </section>
+      </div>
     </div>
-    <ul id="results2"></ul>
-
-    <h2>Vue 3</h2>
-    <div id="app3">
-      <demo-comp v-for="n in instances" :key="n"></demo-comp>
-    </div>
-    <ul id="results3"></ul>
-
-    <script type="module">
-      import Vue2 from 'https://esm.sh/vue@2.7.16/dist/vue.esm.js';
-      import { createApp, nextTick } from 'https://esm.sh/vue@3.5.44/dist/vue.esm-bundler.js';
-      import styleMixin from './index.js';
-
-      const warnings = [];
-      const rawWarn = console.warn;
-      console.warn = (...args) => {
-        warnings.push(args.join(' '));
-        rawWarn(...args);
-      };
-
-      const styleNodes = () =>
-        document.head.querySelectorAll('style[data-vue-component-instances]');
-      const counter = () => {
-        const nodes = styleNodes();
-        return nodes.length > 0
-          ? Number(nodes[0].getAttribute('data-vue-component-instances'))
-          : null;
-      };
-
-      function createAssert(el) {
-        const results = [];
-        return (name, pass) => {
-          results.push({ name, pass });
-          el.innerHTML = results
-            .map(
-              (r) =>
-                `<li style="color: ${r.pass ? 'green' : 'red'}">${r.pass ? '✓' : '✗'} ${r.name}</li>`,
-            )
-            .join('');
-        };
-      }
-
-      const DemoComp = {
-        name: 'DemoComp',
-        mixins: [styleMixin],
-        styles: `<style>.demo-box { color: red; }</style>`,
-        template: '<div class="demo-box">demo</div>',
-      };
-
-      // 两个版本串行执行：每轮结束时实例全部卸载、节点清零，互不干扰。
-      async function run(assert, vm, tick) {
-        vm.instances.push(1, 2, 3);
-        await tick();
-        assert('3 个实例共享 1 个样式节点', styleNodes().length === 1);
-        assert('计数 = 3', counter() === 3);
-
-        vm.instances.pop();
-        await tick();
-        assert('卸载 1 个实例后计数 = 2', counter() === 2);
-
-        vm.instances.splice(0);
-        await tick();
-        assert('全部卸载后节点移除', styleNodes().length === 0);
-
-        vm.instances.push(4, 5);
-        await tick();
-        assert('重新挂载后重建 1 个节点', styleNodes().length === 1);
-        assert('重新挂载后计数 = 2', counter() === 2);
-
-        vm.instances.splice(0);
-        await tick();
-        assert('最终全部卸载后节点移除', styleNodes().length === 0);
-
-        assert('无 destroyed 相关警告', !warnings.some((w) => /destroyed/i.test(w)));
-      }
-
-      const vm2 = new Vue2({
-        el: '#app2',
-        components: { DemoComp },
-        data: { instances: [] },
-      });
-      await run(createAssert(document.getElementById('results2')), vm2, Vue2.nextTick);
-
-      const vm3 = createApp({
-        components: { DemoComp },
-        data: () => ({ instances: [] }),
-      }).mount('#app3');
-      await run(createAssert(document.getElementById('results3')), vm3, nextTick);
-    </script>
   </body>
 </html>

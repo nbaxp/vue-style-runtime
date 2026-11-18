@@ -2,7 +2,7 @@
 /**
  * vue-style-mixin
  *
- * Vue 2.7 / Vue 3 浏览器端组件样式注入与 Scoped CSS 转换。
+ * Vue 3 浏览器端组件样式注入与 Scoped CSS 转换。
  *
  * 支持：
  * - 组件定义上的 styles 字符串。
@@ -289,22 +289,9 @@ function findMatchingBracket(text, openIndex) {
 function getComponentKey(vm) {
   const type = vm && vm.$ && vm.$.type;
 
-  if (type && (typeof type === 'object' || typeof type === 'function')) {
-    return type;
-  }
-
-  const ctorOptions = vm && vm.constructor && vm.constructor.options;
-
-  if (ctorOptions && typeof ctorOptions === 'object') {
-    return ctorOptions;
-  }
-
-  const options = vm && vm.$options;
-  const prototype = options && Object.getPrototypeOf(options);
-
-  return prototype && prototype !== Object.prototype
-    ? prototype
-    : options;
+  return type && (typeof type === 'object' || typeof type === 'function')
+    ? type
+    : null;
 }
 
 function getComponentId(key) {
@@ -1147,36 +1134,28 @@ function removeInstanceStyles(instance) {
 // -----------------------------------------------------------------------------
 
 function getVNodeOwner(vnode) {
-  return (vnode && (vnode.ctx ?? vnode.context)) ?? null;
+  return (vnode && vnode.ctx) ?? null;
 }
 
 function getParentInstance(instance) {
-  return (instance && (instance.parent ?? instance.$parent)) ?? null;
+  return (instance && instance.parent) ?? null;
 }
 
 function getRenderTree(instance) {
-  return instance
-    ? (instance.subTree ?? instance._vnode ?? null)
-    : null;
+  return (instance && instance.subTree) ?? null;
 }
 
 /**
- * 获取组件实例对应的组件 VNode。
- *
- * Vue 3：内部实例.vnode
- * Vue 2.7：公开实例.$vnode
+ * 获取组件实例对应的组件 VNode（内部实例的 vnode）。
  */
 function getComponentVNode(instance) {
-  return instance
-    ? (instance.vnode ?? instance.$vnode ?? null)
-    : null;
+  return (instance && instance.vnode) ?? null;
 }
 
 /**
  * 获取组件公开实例。
  *
- * Vue 3 内部实例.proxy 指向公开实例；
- * Vue 2.7 组件实例本身就是公开实例。
+ * Vue 3 内部实例.proxy 指向公开实例。
  */
 function getPublicInstance(instance) {
   return instance
@@ -1185,12 +1164,7 @@ function getPublicInstance(instance) {
 }
 
 function isElementVNode(vnode) {
-  if (!vnode) return false;
-
-  return (
-    typeof vnode.type === 'string' ||
-    typeof vnode.tag === 'string'
-  );
+  return Boolean(vnode && typeof vnode.type === 'string');
 }
 
 function markScopeAttribute(element, attribute) {
@@ -1242,7 +1216,7 @@ function isComponentRootOfParent(instance) {
  * 获取 Fragment 的唯一有效根节点。
  *
  * 多根 Fragment 不进行普通根 scope 继承。
- * 注释节点、空节点不作为有效根节点。
+ * 注释节点、文本节点（type 为 Symbol）不作为有效根节点。
  */
 function getSingleRootVNode(vnode) {
   if (!vnode || typeof vnode !== 'object') {
@@ -1253,10 +1227,8 @@ function getSingleRootVNode(vnode) {
     return vnode;
   }
 
-  const component = vnode.component ?? vnode.componentInstance;
-
-  if (component) {
-    return getSingleRootVNode(getRenderTree(component));
+  if (vnode.component) {
+    return getSingleRootVNode(getRenderTree(vnode.component));
   }
 
   const children = Array.isArray(vnode.children)
@@ -1266,19 +1238,8 @@ function getSingleRootVNode(vnode) {
   const meaningful = children.filter((child) => {
     if (!child || typeof child !== 'object') return false;
 
-    // Vue 3 Comment VNode 的 type 是 Symbol。
-    if (typeof child.type === 'symbol') return false;
-
-    // Vue 2 注释 VNode 通常没有 tag。
-    if (
-      child.isComment ||
-      child.isStatic &&
-      child.isComment
-    ) {
-      return false;
-    }
-
-    return true;
+    // Vue 3 的 Comment / Text / 内层 Fragment 等 VNode 的 type 是 Symbol。
+    return typeof child.type !== 'symbol';
   });
 
   if (meaningful.length !== 1) {
@@ -1298,18 +1259,15 @@ function getSingleRootVNode(vnode) {
  *
  * 不将多根 Fragment 的所有子节点都视为继承根。
  */
-function markInheritedRoot(vnode, attribute, mark, seen = new WeakSet()) {
+function markInheritedRoot(vnode, attribute, mark) {
   if (!vnode || typeof vnode !== 'object') return;
-
-  if (seen.has(vnode)) return;
-  seen.add(vnode);
 
   const root = getSingleRootVNode(vnode);
 
   if (!root) return;
 
   if (isElementVNode(root)) {
-    mark(root.el ?? root.elm, attribute);
+    mark(root.el, attribute);
   }
 }
 
@@ -1378,8 +1336,7 @@ function isAncestorInstance(owner, self) {
 /**
  * 判断组件 VNode 是否属于当前组件。
  *
- * Vue 3 ctx 是内部实例；
- * Vue 2.7 context 是组件实例。
+ * Vue 3 的 vnode.ctx 是内部实例，与 self 同类型可比。
  */
 function isOwnedBy(vnode, self) {
   const owner = getVNodeOwner(vnode);
@@ -1422,7 +1379,7 @@ function markScopedVNodes(
     if (seen.has(vnode)) return;
     seen.add(vnode);
 
-    const component = vnode.component ?? vnode.componentInstance;
+    const component = vnode.component;
 
     if (component) {
       const subTree = getRenderTree(component);
@@ -1448,10 +1405,10 @@ function markScopedVNodes(
       const owner = getVNodeOwner(vnode);
 
       if (!owner || owner === self) {
-        mark(vnode.el ?? vnode.elm, attr);
+        mark(vnode.el, attr);
       } else if (isAncestorInstance(owner, self)) {
         // 祖先提供的插槽内容只标记 slotted scope。
-        mark(vnode.el ?? vnode.elm, slottedAttr);
+        mark(vnode.el, slottedAttr);
       }
     }
 
@@ -1475,15 +1432,6 @@ function markScopedVNodes(
   visit(root);
 }
 
-function markScopedVNodeTree(root, self, scopeAttribute) {
-  markScopedVNodes(
-    root,
-    self,
-    scopeAttribute,
-    `${scopeAttribute}-s`,
-  );
-}
-
 function applyScopeAttr(instance) {
   const name = instanceEntries.get(instance);
 
@@ -1496,7 +1444,7 @@ function applyScopeAttr(instance) {
   const self = instance.$ ?? instance;
 
   markScopedVNodes(
-    getRenderTree(self) ?? instance._vnode,
+    getRenderTree(self),
     self,
     entry.attr,
     `${entry.attr}-s`,
@@ -1506,8 +1454,6 @@ function applyScopeAttr(instance) {
   // Fragment 的 $el 可能是注释节点，markScopeAttribute 会自动忽略。
   markScopeAttribute(instance.$el, entry.attr);
 }
-
-const applyScope = applyScopeAttr;
 
 // -----------------------------------------------------------------------------
 // Vue mixin
@@ -1528,10 +1474,7 @@ const styleMixin = {
 
     const key = getComponentKey(this);
 
-    if (
-      !key ||
-      (typeof key !== 'object' && typeof key !== 'function')
-    ) {
+    if (!key) {
       return;
     }
 
@@ -1554,27 +1497,8 @@ const styleMixin = {
   unmounted() {
     removeInstanceStyles(this);
   },
-
-  // Vue 2.7
-  destroyed() {
-    removeInstanceStyles(this);
-  },
 };
 
-export {
-  addScopeAttr,
-  addStyles,
-  applyScope,
-  applyScopeAttr,
-  markScopedVNodeTree,
-  markScopedVNodes,
-  processStyleBlock,
-  scopeCss,
-  scopeSelector,
-  scopeSelectorList,
-  splitSelectors,
-  styleMixin,
-  transformRules,
-};
+export { styleMixin };
 
 export default styleMixin;

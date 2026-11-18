@@ -1,31 +1,16 @@
 import assert from 'node:assert/strict';
-import { afterEach, beforeEach, test } from 'node:test';
+import { test } from 'node:test';
 
-import { JSDOM } from 'jsdom';
+import { scopeCss, setupDom } from './helpers.js';
 
-import { scopeCss, scopeSelector, styleMixin, transformRules } from '../index.js';
+import styleMixin from '../index.js';
 
-const ATTR = '[data-scope-test]';
-
-let dom;
-
-beforeEach(() => {
-  dom = new JSDOM('<!doctype html><html><head></head><body></body></html>');
-  globalThis.document = dom.window.document;
-  globalThis.DOMParser = dom.window.DOMParser;
-});
-
-afterEach(() => {
-  delete globalThis.document;
-  delete globalThis.DOMParser;
-  dom?.window.close();
-  dom = undefined;
-});
+setupDom();
 
 const headNodes = () => Array.from(document.head.children);
 
 const mount = (mixin, options) => {
-  const vm = { $options: options };
+  const vm = { $options: options, $: { type: options } };
   mixin.created.call(vm);
   mixin.mounted.call(vm);
   return vm;
@@ -33,26 +18,26 @@ const mount = (mixin, options) => {
 
 test('属性选择器复合：属性插在末尾复合选择器，不破坏组合器与属性值', () => {
   assert.equal(
-    scopeCss('.button[aria-expanded="false"] + .menu { color: red; }', 'data-scope-test'),
+    scopeCss('.button[aria-expanded="false"] + .menu { color: red; }'),
     '.button[aria-expanded="false"] + .menu[data-scope-test]{ color: red; }',
   );
   assert.equal(
-    scopeCss('[data-label="a,b"] .x { color: red; }', 'data-scope-test'),
+    scopeCss('[data-label="a,b"] .x { color: red; }'),
     '[data-label="a,b"] .x[data-scope-test]{ color: red; }',
   );
   assert.equal(
-    scopeCss('.icon :deep([class^="vpi-"]) { color: red; }', 'data-scope-test'),
+    scopeCss('.icon :deep([class^="vpi-"]) { color: red; }'),
     '.icon[data-scope-test] [class^="vpi-"]{ color: red; }',
   );
 });
 
 test('多选择器列表整体作用域化，不是只处理首项', () => {
   assert.equal(
-    scopeCss('.a, .b { color: red; }', 'data-scope-test'),
+    scopeCss('.a, .b { color: red; }'),
     '.a[data-scope-test], .b[data-scope-test]{ color: red; }',
   );
   assert.equal(
-    scopeCss('.a::before, .b:hover { color: red; }', 'data-scope-test'),
+    scopeCss('.a::before, .b:hover { color: red; }'),
     '.a[data-scope-test]::before, .b:hover[data-scope-test]{ color: red; }',
   );
 });
@@ -60,15 +45,19 @@ test('多选择器列表整体作用域化，不是只处理首项', () => {
 test('updated 生命周期触发作用域标记，动态节点也能拿到属性', () => {
   const rootEl = document.createElement('div');
   const childEl = document.createElement('span');
-  const vm = { $options: { styles: '<style scoped>.a{color:red}</style>' }, $el: rootEl };
+  const options = { styles: '<style scoped>.a{color:red}</style>' };
+  const internal = { type: options, subTree: null };
+  const vm = { $options: options, $: internal, $el: rootEl };
+
+  internal.proxy = vm;
 
   styleMixin.created.call(vm);
 
-  vm.subTree = {
+  internal.subTree = {
     type: 'div',
-    ctx: vm,
+    ctx: internal,
     el: rootEl,
-    children: [{ type: 'span', ctx: vm, el: childEl, children: [] }],
+    children: [{ type: 'span', ctx: internal, el: childEl, children: [] }],
   };
 
   styleMixin.updated.call(vm);
@@ -100,52 +89,52 @@ test('卸载归零后重新挂载能重建样式，且注入顺序按创建顺�
 
 test('嵌套块内的 & 原样留给 CSS nesting，外层照常作用域化', () => {
   assert.equal(
-    transformRules('.card { &:hover { color: red; } }', ATTR),
+    scopeCss('.card { &:hover { color: red; } }'),
     '.card[data-scope-test]{ &:hover { color: red; } }',
   );
   assert.equal(
-    transformRules('@media (min-width: 48rem) { .card { &:lang(ja) { font-feature-settings: "palt"; } } }', ATTR),
+    scopeCss('@media (min-width: 48rem) { .card { &:lang(ja) { font-feature-settings: "palt"; } } }'),
     '@media (min-width: 48rem) { .card[data-scope-test]{ &:lang(ja) { font-feature-settings: "palt"; } } }',
   );
 });
 
 test('引号外的反斜杠转义不参与切分', () => {
   assert.equal(
-    scopeCss('.a\\,b, .c { color: red; }', 'data-scope-test'),
+    scopeCss('.a\\,b, .c { color: red; }'),
     '.a\\,b[data-scope-test], .c[data-scope-test]{ color: red; }',
   );
   assert.equal(
-    scopeCss('.a\\{b { color: red; }', 'data-scope-test'),
+    scopeCss('.a\\{b { color: red; }'),
     '.a\\{b[data-scope-test]{ color: red; }',
   );
   assert.equal(
-    scopeCss('.\\31 23 { color: red; }', 'data-scope-test'),
+    scopeCss('.\\31 23 { color: red; }'),
     '.\\31 23[data-scope-test]{ color: red; }',
   );
 });
 
 test('空规则块、纯注释与值内花括号/分号不吞掉后续规则', () => {
   assert.equal(
-    transformRules('/* note */ .a { color: red; }', ATTR),
+    scopeCss('/* note */ .a { color: red; }'),
     '/* note */ .a[data-scope-test]{ color: red; }',
   );
   assert.equal(
-    transformRules('.empty { } .a { color: red; }', ATTR),
+    scopeCss('.empty { } .a { color: red; }'),
     '.empty[data-scope-test]{ } .a[data-scope-test]{ color: red; }',
   );
   assert.equal(
-    transformRules('.a { content: "{}"; } .b { color: red; }', ATTR),
+    scopeCss('.a { content: "{}"; } .b { color: red; }'),
     '.a[data-scope-test]{ content: "{}"; } .b[data-scope-test]{ color: red; }',
   );
   assert.equal(
-    transformRules('.a { background: url("a;b.svg"); } .b { color: red; }', ATTR),
+    scopeCss('.a { background: url("a;b.svg"); } .b { color: red; }'),
     '.a[data-scope-test]{ background: url("a;b.svg"); } .b[data-scope-test]{ color: red; }',
   );
 });
 
 test(':deep(.b, .c) 多参数展开为多个作用域化选择器', () => {
   assert.equal(
-    scopeSelector('.a :deep(.b, .c)', ATTR),
-    '.a[data-scope-test] .b, .a[data-scope-test] .c',
+    scopeCss('.a :deep(.b, .c) { }'),
+    '.a[data-scope-test] .b, .a[data-scope-test] .c{ }',
   );
 });
