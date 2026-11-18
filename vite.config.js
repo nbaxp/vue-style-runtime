@@ -10,8 +10,6 @@ export default defineConfig({
     __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: false,
   },
   build: {
-    outDir: 'dist',
-    emptyOutDir: true,
     target: 'es2020',
   },
 });

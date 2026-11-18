@@ -10,89 +10,54 @@ import {
 } from 'vue/dist/vue.esm-bundler.js';
 
 // 源码以 data: 模块执行，模块内无法解析相对说明符，
-// 所以预设里写带 origin 的绝对地址；dev 下指向源码，preview/gh-pages 下指向 dist 产物。
+// 所以示例里写带 origin 的绝对地址；dev 下指向源码，preview/gh-pages 下指向 dist 产物。
 const libraryUrl = new URL('./index.js', location.href).href;
-const childUrl = new URL('./demo-child.js', location.href).href;
 
-const DEFAULT_SOURCE = `import styleMixin from '${libraryUrl}';
+// 一个示例同时覆盖三类改写：基础 scoped、:deep 穿透、:slotted 插槽。
+const EXAMPLE_SOURCE = `import styleMixin from '${libraryUrl}';
 
-export default {
-  name: 'DemoCard',
+const DemoChild = {
+  name: 'DemoChild',
   mixins: [styleMixin],
-  template: \`
-    <div class="demo-card">
-      <h3 class="demo-card__title">scoped 样式实时改写</h3>
-      <p class="demo-card__text">
-        修改左侧的组件对象，右栏会重新挂载组件；
-        下方可以看到 head 中改写后的真实 CSS。
-      </p>
-    </div>
-  \`,
   styles: \`
     <style scoped>
-    .demo-card {
-      border: 1px solid #93c5fd;
-      background: #eff6ff;
-      border-radius: 8px;
-      padding: 14px 16px;
-    }
-    .demo-card__title {
-      margin: 0 0 6px;
-      color: #1d4ed8;
-    }
-    .demo-card__text {
-      margin: 0;
-      color: #3b82f6;
-    }
+      .demo-badge {
+        display: inline-block;
+        background: #dbeafe;
+        color: #1d4ed8;
+        border-radius: 999px;
+        padding: 2px 10px;
+      }
     </style>
   \`,
-};`;
-
-const DEEP_SOURCE = `import styleMixin from '${libraryUrl}';
-import DemoChild from '${childUrl}';
+  template: \`<span class="demo-badge">子组件内部 badge</span>\`,
+};
 
 export default {
-  name: 'DemoDeep',
+  name: 'DemoExample',
   mixins: [styleMixin],
   components: { DemoChild },
   template: \`
-    <div class="demo-deep">
-      父组件用 :deep(.demo-badge) 改写子组件内部 badge：
-      <demo-child></demo-child>
+    <div class="demo-root">
+      <p class="demo-text">这段文字与边框来自基础 scoped 样式。</p>
+      <p>子组件 badge 被父组件 :deep(.demo-badge) 改写：<demo-child></demo-child></p>
+      <p>插槽内容被 :slotted(.slot-item) 改写：<slot></slot></p>
     </div>
   \`,
   styles: \`
     <style scoped>
-    .demo-deep {
-      border: 1px dashed #f59e0b;
+    .demo-root {
+      border: 1px dashed #93c5fd;
       border-radius: 8px;
       padding: 14px 16px;
     }
-    .demo-deep :deep(.demo-badge) {
+    .demo-text {
+      margin: 0 0 8px;
+      color: #1d4ed8;
+    }
+    .demo-root :deep(.demo-badge) {
       background: #fef3c7;
       color: #b45309;
-    }
-    </style>
-  \`,
-};`;
-
-const SLOTTED_SOURCE = `import styleMixin from '${libraryUrl}';
-
-export default {
-  name: 'DemoSlot',
-  mixins: [styleMixin],
-  template: \`
-    <div class="demo-slot">
-      子组件内部区域：<slot></slot>
-    </div>
-  \`,
-  styles: \`
-    <style scoped>
-    .demo-slot {
-      border: 1px dashed #10b981;
-      border-radius: 8px;
-      padding: 14px 16px;
-      color: #065f46;
     }
     :slotted(.slot-item) {
       background: #d1fae5;
@@ -142,10 +107,9 @@ async function createComponent(source) {
   return component;
 }
 
-const source = ref(DEFAULT_SOURCE);
+const source = ref(EXAMPLE_SOURCE);
 const view = shallowRef(null);
 const revision = ref(0);
-const previewOn = ref(true);
 const error = ref('');
 const injected = ref([]);
 
@@ -184,9 +148,9 @@ watch(source, () => {
   timer = setTimeout(apply, 280);
 });
 
-function loadPreset(text) {
+function resetExample() {
   skipWatch = true;
-  source.value = text;
+  source.value = EXAMPLE_SOURCE;
   apply();
 }
 
@@ -232,23 +196,10 @@ const app = createApp({
       source,
       view,
       revision,
-      previewOn,
       error,
       injected,
       styleDump,
-      loadPreset,
-      apply,
-      remount() {
-        revision.value += 1;
-      },
-      togglePreview() {
-        previewOn.value = !previewOn.value;
-      },
-      presets: {
-        basic: DEFAULT_SOURCE,
-        deep: DEEP_SOURCE,
-        slotted: SLOTTED_SOURCE,
-      },
+      resetExample,
     };
   },
 });

@@ -88,7 +88,7 @@
         font-size: 12px;
       }
 
-      .presets {
+      .toolbar {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
@@ -175,12 +175,6 @@
         color: #9aa5b1;
         font-size: 13px;
       }
-
-      .note {
-        margin: 10px 0 0;
-        color: #616e7c;
-        font-size: 12.5px;
-      }
     </style>
   </head>
   <body>
@@ -200,13 +194,10 @@
             左侧是组件对象源码（<code>export default { ... }</code>），<code>styles</code> 为
             含 <code>&lt;style&gt;</code> 的非空字符串。源码会原样编码成
             <code>data:</code> 模块执行，因此只能用带 origin 的绝对地址 import
-            （<code>/index.js</code> 这类相对写法在 <code>data:</code> 模块里无法解析）；辅助子组件模块位于
-            <code>/demo-child.js</code>。修改后约 300ms 重新挂载。
+            （<code>/index.js</code> 这类相对写法在 <code>data:</code> 模块里无法解析）。
           </p>
-          <div class="presets">
-            <button type="button" @click="loadPreset(presets.basic)">基础 scoped</button>
-            <button type="button" @click="loadPreset(presets.deep)">:deep 穿透</button>
-            <button type="button" @click="loadPreset(presets.slotted)">:slotted 插槽</button>
+          <div class="toolbar">
+            <button type="button" @click="resetExample()">重置示例</button>
           </div>
           <textarea v-model="source" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
         </section>
@@ -214,25 +205,13 @@
         <section class="panel">
           <div class="panel-head">
             <h2>预览区</h2>
-            <span class="status">已挂载第 <strong>{{ revision }}</strong> 次</span>
-          </div>
-          <div class="presets">
-            <button type="button" @click="remount">重新挂载</button>
-            <button type="button" @click="togglePreview">
-              {{ previewOn ? '卸载预览' : '挂载预览' }}
-            </button>
-            <button type="button" @click="apply">应用编辑</button>
           </div>
           <div class="preview">
-            <component v-if="previewOn" :is="view" :key="revision">
+            <component :is="view" :key="revision">
               <span class="slot-item">来自父组件插槽的内容</span>
             </component>
-            <p v-else class="empty">预览已卸载，head 中对应的样式节点也应被移除。</p>
           </div>
           <p v-if="error" class="error">{{ error }}</p>
-          <p class="note">
-            “卸载预览”会触发组件的 unmounted，下方样式节点数量应同步减少；“重新挂载”会重新注入。
-          </p>
         </section>
 
         <section class="panel" style="grid-column: 1 / -1">

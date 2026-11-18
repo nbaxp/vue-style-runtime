@@ -117,7 +117,7 @@ CSS 改写、VNode 标记、样式注入等函数均为内部实现，不再导�
 - 追加的属性选择器会提高优先级，没有 `:where()` 降权。
 - 不做预处理：`lang="scss"` 等属性会保留，但内容不会被编译。
 
-## 从 0.5.x 升级（0.6.0 起，当前 1.0.0）
+## 从 0.5.x 升级（0.6.0 起，当前 1.0.1）
 
 0.6.0 只保留运行时 mixin：底层函数（`addStyles`、`scopeCss`、`scopeSelector` 等）不再导出，原先单独调用的用法改为挂载 `styleMixin`；同时移除 Vue 2 支持（`destroyed`、Vue 2 VNode 字段与 `constructor.options` 回退全部删除），`peerDependencies` 收紧为 `vue: ^3.0.0`。组件身份现在只认 `$.type`，同一组件定义的实例仍共享样式节点。1.0.0 未改动公共 API，仍只导出默认导出与 `styleMixin`。
 
@@ -132,15 +132,15 @@ npm run preview  # 本地预览 dist 里的演示页（需先 npm run build）
 
 `npm run build` 依次执行：
 
-- `npm run build:demo`：Vite 以根目录 `index.html` 为入口构建演示页，输出 `dist/index.html` 与 `dist/assets/*`。
-- `npm run build:lib`：Vite 库构建依次输出未压缩的 `dist/index.js` 与经 terser 压缩的 `dist/index.min.js`，不清空上一步的演示产物。
+- `vite build`：以根目录 `index.html` 为入口构建演示页，输出 `dist/index.html` 与 `dist/assets/*`。
+- `npm run build:lib`：Vite 库构建依次输出未压缩的 `dist/index.js` 与经 Oxc 压缩的 `dist/index.min.js`，不清空上一步的演示产物。
 
 `dist` 分层如下：
 
 | 路径                             | 用途                         | 体积（gzip）        | 是否发布到 npm |
 | -------------------------------- | ---------------------------- | ------------------- | -------------- |
-| `dist/index.js`                  | 库产物（未压缩 ESM）         | 25.32 kB（4.81 kB） | 是             |
-| `dist/index.min.js`              | 库产物（压缩 ESM）           | 10.14 kB（3.44 kB） | 是             |
+| `dist/index.js`                  | 库产物（未压缩 ESM）         | 22.96 kB（5.16 kB） | 是             |
+| `dist/index.min.js`              | 库产物（压缩 ESM）           | 13.48 kB（3.84 kB） | 是             |
 | `dist/index.html`、`dist/assets/` | 演示页（preview / gh-pages） | —                   | 否             |
 
 库产物无外部依赖，只导出 `default` 与 `styleMixin`，可直接用 `<script type="module">` 或 importmap 引入：
@@ -167,13 +167,13 @@ import styleMixin from 'vue-style-runtime/index.min.js';
 
 ## 在线演示
 
-根目录 [`index.html`](index.html) 是演示页：左侧编辑 SFC 风格的 `<template>` 与 `<style>`（可带 `scoped`），右侧约 300ms 防抖后真实重新挂载组件；页面底部实时展示 `<head>` 中被改写的 CSS、实例计数与作用域标记。内置“基础 scoped / `:deep` 穿透 / `:slotted` 插槽”预设，并提供“重新挂载”“卸载预览”验证 `unmounted` 清理。
+根目录 [`index.html`](index.html) 是演示页：左侧编辑 SFC 风格的 `<template>` 与 `<style>`（可带 `scoped`），右侧约 300ms 防抖后真实重新挂载组件；页面底部实时展示 `<head>` 中被改写的 CSS、实例计数与作用域标记。内置示例同时用到基础 scoped、`:deep` 穿透与 `:slotted` 插槽，可随时“重置示例”。
 
 演示逻辑在 [`src/demo.js`](src/demo.js)，直接 `import styleMixin from '../index.js'`（源码入口，不是 dist）；Vue 来自本地开发依赖 `vue/dist/vue.esm-bundler.js`（完整构建，页面内可运行时编译模板），编译期特性开关在 `vite.config.js` 的 `define` 中声明。本地开发与预览命令见「开发、构建与预览」，开发服务器默认 `http://localhost:5173/`。
 
 ### GitHub Pages
 
-打 `v*` Tag 时，[`.github/workflows/pages.yml`](.github/workflows/pages.yml) 会安装依赖，执行 `npm run build:demo && npm run build:lib:unminified`（演示页运行时按同目录地址加载库入口，因此 `dist/index.js` 必须一并构建），并通过 `peaceiris/actions-gh-pages` 把 `dist` 内容推送到 `gh-pages` 分支（该 action 默认生成 `.nojekyll`，避免 Vue 模板中的 `{{ }}` 被 Jekyll/Liquid 解析）。
+打 `v*` Tag 时，[`.github/workflows/pages.yml`](.github/workflows/pages.yml) 会安装依赖，执行 `npm run build`（演示页运行时按同目录地址加载库入口，因此 `dist/index.js` 必须一并构建），并通过 `peaceiris/actions-gh-pages` 把 `dist` 内容推送到 `gh-pages` 分支（该 action 默认生成 `.nojekyll`，避免 Vue 模板中的 `{{ }}` 被 Jekyll/Liquid 解析）。
 
 1. 仓库 Settings → Pages → Build and deployment，Source 选择 **Deploy from a branch**。
 2. Branch 选 `gh-pages`，目录选 `/ (root)`，保存。
@@ -192,6 +192,5 @@ npm test   # node --test "tests/**/*.test.js"，jsdom 环境
 ## 发布
 
 1. 首次发布：包在 npm 上尚不存在，无法配置 Trusted Publisher；本地 `npm login` 后执行 `npm publish`（需 npm 账号 2FA）。
-2. 首次发布完成后，到 npm 包页面 Settings → Trusted publishing 绑定本仓库与工作流（`.github/workflows/publish.yml`），此后由 CI 通过 OIDC 发布，无需长期 token。
-3. 后续版本：修改 `package.json` 的 `version` 并提交，然后 `git tag vX.Y.Z && git push origin vX.Y.Z`；工作流依次校验标签与版本、安装依赖、测试、`npm pack`、`npm publish`，并创建同名 GitHub Release 附 `.tgz`。发布的是 `npm pack` 生成的 tarball，其中包含 `dist/index.js` 与 `dist/index.min.js`；`npm pack` 会触发 `prepack` 构建这两份库产物，因此工作流不再单独执行构建。
-4. 工作流也可手工触发，默认 `dry_run=true` 只执行 `npm publish --dry-run`；手动正式发布须选择 `v*` Tag 并设置 `dry_run=false`。
+2. 首次发布完成后，到 npm 包页面 Settings → Trusted publishing 绑定本仓库与工作流（`.github/workflows/publish.yml`）。
+3. 后续版本：修改 `package.json` 的 `version` 并提交，然后 `git tag vX.Y.Z && git push origin vX.Y.Z`。工作流会安装依赖、构建、测试，再执行 `npm publish`；发布内容由 `files` 字段决定，只含 `dist/index.js` 与 `dist/index.min.js`。

@@ -7,13 +7,10 @@ export default defineConfig(({ mode }) => {
 
   return {
     build: {
-      outDir: 'dist',
       emptyOutDir: false,
-      copyPublicDir: false,
       target: 'es2020',
-      // 库构建用 terser：Vite 对 ES 格式的 lib 构建会强制 esbuild 的
-      // minifyWhitespace: false，只能混淆标识符与语法，体积压不下去。
-      minify: minify ? 'terser' : false,
+      // Vite 8 默认压缩器是 Oxc；lib 的 ES 格式不压空白，以保留 pure 注解。
+      minify: minify ? 'oxc' : false,
       lib: {
         entry: 'index.js',
         formats: ['es'],

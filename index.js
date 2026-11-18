@@ -1,22 +1,13 @@
 
 /**
- * vue-style-mixin
- *
  * Vue 3 浏览器端组件样式注入与 Scoped CSS 转换。
  *
- * 支持：
- * - 组件定义上的 styles 字符串。
- * - 顶层 <style>、<style scoped>、<link rel="stylesheet">。
- * - 普通选择器、:deep()、:slotted()、:global()。
- * - 历史 /deep/、>>>。
- * - @media、@supports、@container、@layer、@scope 等分组规则。
- * - keyframes（包括常见厂商前缀）。
- * - CSS 字符串、注释、括号、属性选择器和转义字符感知。
+ * styles 取自组件定义，只识别顶层 <style> / <link rel="stylesheet">；
+ * 改写普通选择器与 :deep() / :slotted() / :global()、历史 /deep/ 与 >>>，
+ * 递归处理分组 at-rule、跳过 keyframes，扫描时感知字符串、注释、括号与转义。
  *
- * 限制：
- * - 不替代 @vue/compiler-sfc。
- * - 不转换普通规则体中的 CSS nesting。
- * - styles 是组件定义级静态配置，不支持实例级动态修改。
+ * 不替代 @vue/compiler-sfc，不转换规则体内的 CSS nesting；
+ * styles 为组件定义级静态配置，实例运行期修改不生效。
  */
 
 const styleCounterName = 'data-vue-component-instances';
@@ -45,19 +36,9 @@ const KEYFRAMES_AT_RULES = new Set([
   '@-o-keyframes',
 ]);
 
-// -----------------------------------------------------------------------------
-// CSS lexical helpers
-// -----------------------------------------------------------------------------
+// ---- CSS lexical helpers ----
 
-/**
- * 跳过 CSS 转义序列。
- *
- * 支持：
- * - 普通转义；
- * - 最多 6 位十六进制转义；
- * - 十六进制转义后的可选空白；
- * - 转义换行。
- */
+// 跳过 CSS 转义：普通转义、最多 6 位十六进制转义（含其后可选空白）、转义换行。
 function skipCssEscape(text, index) {
   if (text[index] !== '\\') return index + 1;
 
@@ -116,16 +97,7 @@ function skipWhitespaceAndComments(css, start) {
   return i;
 }
 
-/**
- * 按顶层分隔符切分。
- *
- * 忽略：
- * - 字符串；
- * - 注释；
- * - 函数括号；
- * - 属性选择器；
- * - CSS 转义。
- */
+// 按顶层分隔符切分，忽略字符串、注释、函数括号、属性选择器与 CSS 转义。
 function splitSelectors(input, delimiter = ',') {
   const parts = [];
 
@@ -282,9 +254,7 @@ function findMatchingBracket(text, openIndex) {
   return -1;
 }
 
-// -----------------------------------------------------------------------------
-// Component identity
-// -----------------------------------------------------------------------------
+// ---- Component identity ----
 
 function getComponentKey(vm) {
   const type = vm && vm.$ && vm.$.type;
@@ -305,15 +275,9 @@ function getComponentId(key) {
   return name;
 }
 
-// -----------------------------------------------------------------------------
-// Scoped selector helpers
-// -----------------------------------------------------------------------------
+// ---- Scoped selector helpers ----
 
-/**
- * 精确判断选择器中是否已经存在目标属性选择器。
- *
- * 不使用 includes()，避免属性值、字符串和注释中的相同文本造成误判。
- */
+// 判断选择器中是否已存在目标属性；不用 includes()，避免值/字符串/注释里的同文本误判。
 function hasScopeAttribute(selector, attrSelector) {
   const expected = attrSelector.slice(1, -1);
 
@@ -366,11 +330,7 @@ function hasScopeAttribute(selector, attrSelector) {
   return false;
 }
 
-/**
- * 定位最后一个复合选择器中的伪元素。
- *
- * 伪元素参数中的括号、字符串、属性选择器不会干扰定位。
- */
+// 定位最后一个复合选择器中的伪元素；参数里的括号、字符串、属性选择器不干扰定位。
 function findTrailingPseudoElement(selector) {
   let quote = '';
   let comment = false;
@@ -455,11 +415,7 @@ function addScopeAttr(selector, attrSelector) {
   return `${value}${attrSelector}`;
 }
 
-/**
- * 查找特殊伪类。
- *
- * 在字符串、注释和属性选择器中不识别。
- */
+// 查找特殊伪类；字符串、注释和属性选择器内不识别。
 function findSpecialPseudo(selector, names) {
   let quote = '';
   let comment = false;
@@ -518,11 +474,7 @@ function findSpecialPseudo(selector, names) {
   return null;
 }
 
-/**
- * 查找顶层历史 deep 组合符。
- *
- * 不在字符串、注释、属性选择器和函数参数中识别。
- */
+// 查找顶层历史 deep 组合符；字符串、注释、属性选择器和函数参数内不识别。
 function findLegacyDeep(selector) {
   let quote = '';
   let comment = false;
@@ -581,16 +533,8 @@ function findLegacyDeep(selector) {
   return null;
 }
 
-/**
- * 将历史 deep 组合符规范化成 :deep()。
- *
- * 例如：
- * .a /deep/ .b       -> .a :deep(.b)
- * .a >>> .b          -> .a :deep(.b)
- * .a > /deep/ .b     -> .a > :deep(.b)
- *
- * 深度组合符右侧整体作为 deep 参数，因此不会把 scope 错误地放到右侧。
- */
+// 历史 deep 组合符统一成 :deep()：右侧整体作为参数，避免 scope 落到右边。
+// .a /deep/ .b -> .a :deep(.b)；.a > /deep/ .b -> .a > :deep(.b)
 function normalizeLegacyDeep(selector, depth = 0) {
   if (depth > 32) return selector;
 
@@ -614,9 +558,7 @@ function normalizeLegacyDeep(selector, depth = 0) {
   return normalizeLegacyDeep(normalized, depth + 1);
 }
 
-/**
- * 查找选择器末尾的显式组合器。
- */
+// 查找选择器末尾的显式组合器。
 function splitTrailingCombinator(selector) {
   let quote = '';
   let comment = false;
@@ -683,17 +625,8 @@ function splitTrailingCombinator(selector) {
   return { head, combinator };
 }
 
-/**
- * 处理单个选择器。
- *
- * 语义：
- * - 普通选择器：添加普通 scope。
- * - :deep(X)：左侧添加普通 scope，X 不添加普通 scope。
- * - :slotted(X)：只给 X 添加 slotted scope。
- * - :global(X)：展开 X，不添加 scope。
- *
- * :global() 是本项目扩展，不代表 Vue SFC 官方语义。
- */
+// 单个选择器：普通选择器加普通 scope；:deep(X) 只作用域化左侧；
+// :slotted(X) 只给 X 加 -s；:global(X) 展开且不加 scope（本项目扩展）。
 function transformSelector(
   selector,
   attrSelector,
@@ -785,13 +718,9 @@ function scopeSelectorList(
     .join(', ');
 }
 
-// -----------------------------------------------------------------------------
-// CSS rule scanner
-// -----------------------------------------------------------------------------
+// ---- CSS rule scanner ----
 
-/**
- * 查找顶层规则边界。
- */
+// 查找顶层规则边界。
 function scanRuleBoundary(css, start) {
   let quote = '';
   let comment = false;
@@ -908,11 +837,7 @@ function isKeyframesAtRule(name) {
   );
 }
 
-/**
- * 递归处理分组 at-rule。
- *
- * 普通规则体中的 CSS nesting 不转换。
- */
+// 递归处理分组 at-rule；规则体内的 CSS nesting 不转换。
 function transformRules(
   css,
   attrSelector,
@@ -984,9 +909,7 @@ function scopeCss(css, scopeAttribute) {
   );
 }
 
-// -----------------------------------------------------------------------------
-// Style parsing and injection
-// -----------------------------------------------------------------------------
+// ---- Style parsing and injection ----
 
 function processStyleBlock(node, name) {
   if (
@@ -1129,9 +1052,7 @@ function removeInstanceStyles(instance) {
   removeStyles(name);
 }
 
-// -----------------------------------------------------------------------------
-// Vue instance / VNode helpers
-// -----------------------------------------------------------------------------
+// ---- Vue instance / VNode helpers ----
 
 function getVNodeOwner(vnode) {
   return (vnode && vnode.ctx) ?? null;
@@ -1145,18 +1066,12 @@ function getRenderTree(instance) {
   return (instance && instance.subTree) ?? null;
 }
 
-/**
- * 获取组件实例对应的组件 VNode（内部实例的 vnode）。
- */
+// 组件实例对应的组件 VNode。
 function getComponentVNode(instance) {
   return (instance && instance.vnode) ?? null;
 }
 
-/**
- * 获取组件公开实例。
- *
- * Vue 3 内部实例.proxy 指向公开实例。
- */
+// 公开实例：内部实例的 proxy。
 function getPublicInstance(instance) {
   return instance
     ? (instance.proxy ?? instance)
@@ -1173,11 +1088,7 @@ function markScopeAttribute(element, attribute) {
   }
 }
 
-/**
- * 获取组件实例已经注册的 scoped 属性。
- *
- * Vue 3 需要通过 proxy 找到 mixin 保存的公开实例。
- */
+// 取已注册的 scope 属性；需经 proxy 找到 mixin 保存的公开实例。
 function getInstanceScopeAttribute(instance) {
   const publicInstance = getPublicInstance(instance);
 
@@ -1190,13 +1101,7 @@ function getInstanceScopeAttribute(instance) {
   return styleEntries.get(name)?.attr ?? null;
 }
 
-/**
- * 判断 instance 是否为其父组件的直接渲染根。
- *
- * 注意：
- * 比较的是 instance 自己的组件 VNode 与父组件 subTree，
- * 不是子组件 VNode 与父组件 subTree。
- */
+// instance 是否为父组件的直接渲染根：比的是它自己的组件 VNode 与父组件 subTree。
 function isComponentRootOfParent(instance) {
   const parent = getParentInstance(instance);
 
@@ -1212,12 +1117,7 @@ function isComponentRootOfParent(instance) {
   );
 }
 
-/**
- * 获取 Fragment 的唯一有效根节点。
- *
- * 多根 Fragment 不进行普通根 scope 继承。
- * 注释节点、文本节点（type 为 Symbol）不作为有效根节点。
- */
+// Fragment 的唯一有效根；多根不继承根 scope，Symbol 类型的注释/文本节点不算。
 function getSingleRootVNode(vnode) {
   if (!vnode || typeof vnode !== 'object') {
     return null;
@@ -1249,16 +1149,7 @@ function getSingleRootVNode(vnode) {
   return getSingleRootVNode(meaningful[0]);
 }
 
-/**
- * 将属性添加到组件渲染根。
- *
- * 支持：
- * - 普通元素根；
- * - 单根 Fragment；
- * - 根节点本身为子组件的情况。
- *
- * 不将多根 Fragment 的所有子节点都视为继承根。
- */
+// 给组件渲染根打属性：普通元素、单根 Fragment、根为子组件；多根 Fragment 不展开。
 function markInheritedRoot(vnode, attribute, mark) {
   if (!vnode || typeof vnode !== 'object') return;
 
@@ -1271,15 +1162,7 @@ function markInheritedRoot(vnode, attribute, mark) {
   }
 }
 
-/**
- * 将父组件及符合根链条件的祖先 scope 添加到子组件根节点。
- *
- * 规则：
- * 1. 父组件 scope 必须添加，不依赖根链判断。
- * 2. 只有当前父组件本身是其父组件的直接渲染根，
- *    才继续添加祖父 scope。
- * 3. 每一层都使用该组件自己的 scope 属性。
- */
+// 父 scope 必加；只有父组件自身也是祖辈的直接渲染根，才沿根链继续上溯祖父 scope。
 function markInheritedScopeChain(
   childRoot,
   parentComponent,
@@ -1318,44 +1201,15 @@ function markInheritedScopeChain(
   }
 }
 
-/**
- * 判断 VNode owner 是否为 self 的祖先。
- */
-function isAncestorInstance(owner, self) {
-  for (
-    let parent = getParentInstance(self);
-    parent;
-    parent = getParentInstance(parent)
-  ) {
-    if (parent === owner) return true;
-  }
-
-  return false;
-}
-
-/**
- * 判断组件 VNode 是否属于当前组件。
- *
- * Vue 3 的 vnode.ctx 是内部实例，与 self 同类型可比。
- */
+// 组件 VNode 是否属于当前组件；vnode.ctx 是内部实例，与 self 同类型可比。
 function isOwnedBy(vnode, self) {
   const owner = getVNodeOwner(vnode);
 
   return !owner || owner === self;
 }
 
-/**
- * 遍历 VNode 树。
- *
- * 当前组件 scope：
- * - 当前组件创建的元素；
- * - 子组件根节点（父 scope 必须继承）。
- *
- * slotted scope：
- * - 当前组件实际渲染树中由祖先组件创建的插槽元素。
- *
- * 不给子组件内部普通元素添加当前组件 scope。
- */
+// 遍历 VNode 树：本组件创建的元素与子组件根打普通 scope，
+// 祖先传入的插槽元素打 -s，子组件内部的普通元素不打。
 function markScopedVNodes(
   root,
   self,
@@ -1364,6 +1218,17 @@ function markScopedVNodes(
   mark = markScopeAttribute,
 ) {
   const seen = new WeakSet();
+
+  // 祖先链在一次遍历期间不变，预先建 Set，避免每个元素都从 self 上溯。
+  const ancestors = new Set();
+
+  for (
+    let parent = getParentInstance(self);
+    parent;
+    parent = getParentInstance(parent)
+  ) {
+    ancestors.add(parent);
+  }
 
   const visit = (vnode) => {
     if (!vnode || typeof vnode !== 'object') return;
@@ -1386,9 +1251,7 @@ function markScopedVNodes(
 
       // 当前组件模板中的子组件根节点必须继承当前 scope。
       if (isOwnedBy(vnode, self) && subTree) {
-        markInheritedRoot(subTree, attr, mark);
-
-        // 祖先 scope 只按组件根节点继承链传播。
+        // 当前组件及符合条件的祖先 scope 统一沿根节点继承链传播。
         markInheritedScopeChain(subTree, self, mark);
       }
 
@@ -1406,7 +1269,7 @@ function markScopedVNodes(
 
       if (!owner || owner === self) {
         mark(vnode.el, attr);
-      } else if (isAncestorInstance(owner, self)) {
+      } else if (ancestors.has(owner)) {
         // 祖先提供的插槽内容只标记 slotted scope。
         mark(vnode.el, slottedAttr);
       }
@@ -1455,9 +1318,7 @@ function applyScopeAttr(instance) {
   markScopeAttribute(instance.$el, entry.attr);
 }
 
-// -----------------------------------------------------------------------------
-// Vue mixin
-// -----------------------------------------------------------------------------
+// ---- Vue mixin ----
 
 const styleMixin = {
   created() {

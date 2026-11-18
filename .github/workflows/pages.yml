@@ -41,7 +41,7 @@ jobs:
 
       - name: Build
         # 演示页运行时从同目录 absolute URL 加载库入口，所以除演示页外还要产出 dist/index.js。
-        run: npm run build:demo && npm run build:lib:unminified
+        run: npm run build
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4
