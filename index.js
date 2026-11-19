@@ -50,6 +50,48 @@ function skipCssEscape(text, index) {
 	}
 	return i + 1;
 }
+function scanCss(text, start, visitor, trackDepth = false, clampDepth = true) {
+	let quote = "";
+	let comment = false;
+	let round = 0;
+	let square = 0;
+	for (let i = start; i < text.length; i += 1) {
+		const ch = text[i];
+		const next = text[i + 1];
+		if (comment) {
+			if (ch === "*" && next === "/") {
+				comment = false;
+				i += 1;
+			}
+			continue;
+		}
+		if (quote) {
+			if (ch === "\\") i = skipCssEscape(text, i) - 1;
+			else if (ch === quote) quote = "";
+			continue;
+		}
+		if (ch === "\\") {
+			i = skipCssEscape(text, i) - 1;
+			continue;
+		}
+		if (ch === "/" && next === "*") {
+			comment = true;
+			i += 1;
+			continue;
+		}
+		if (ch === "\"" || ch === "'") {
+			quote = ch;
+			continue;
+		}
+		if (trackDepth) {
+			if (ch === "(") round += 1;
+			else if (ch === ")") round = clampDepth ? Math.max(0, round - 1) : round - 1;
+			else if (ch === "[") square += 1;
+			else if (ch === "]") square = clampDepth ? Math.max(0, square - 1) : square - 1;
+		}
+		if (visitor(i, ch, round, square) === false) return;
+	}
+}
 function skipWhitespaceAndComments(css, start) {
 	let i = start;
 	while (i < css.length) if (/\s/.test(css[i])) i += 1;
@@ -62,105 +104,34 @@ function skipWhitespaceAndComments(css, start) {
 function splitSelectors(input, delimiter = ",") {
 	const parts = [];
 	let start = 0;
-	let round = 0;
-	let square = 0;
-	let quote = "";
-	let comment = false;
-	for (let i = 0; i < input.length; i += 1) {
-		const ch = input[i];
-		const next = input[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
-		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(input, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(input, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "(") round += 1;
-		else if (ch === ")") round = Math.max(0, round - 1);
-		else if (ch === "[") square += 1;
-		else if (ch === "]") square = Math.max(0, square - 1);
-		else if (ch === delimiter && round === 0 && square === 0) {
+	scanCss(input, 0, (i, ch, round, square) => {
+		if (ch === delimiter && round === 0 && square === 0) {
 			parts.push(input.slice(start, i).trim());
 			start = i + 1;
 		}
-	}
+	}, true);
 	parts.push(input.slice(start).trim());
 	return parts.filter(Boolean);
 }
 function findMatchingParen(text, openIndex) {
-	let depth = 0;
-	let quote = "";
-	let comment = false;
-	for (let i = openIndex; i < text.length; i += 1) {
-		const ch = text[i];
-		const next = text[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
+	let result = -1;
+	scanCss(text, openIndex, (i, ch, round) => {
+		if (ch === ")" && round === 0) {
+			result = i;
+			return false;
 		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(text, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(text, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "(") depth += 1;
-		else if (ch === ")") {
-			depth -= 1;
-			if (depth === 0) return i;
-		}
-	}
-	return -1;
+	}, true, false);
+	return result;
 }
 function findMatchingBracket(text, openIndex) {
-	let depth = 0;
-	let quote = "";
-	let comment = false;
-	for (let i = openIndex; i < text.length; i += 1) {
-		const ch = text[i];
-		const next = text[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
+	let result = -1;
+	scanCss(text, openIndex, (i, ch, round, square) => {
+		if (ch === "]" && square === 0) {
+			result = i;
+			return false;
 		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(text, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(text, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "[") depth += 1;
-		else if (ch === "]") {
-			depth -= 1;
-			if (depth === 0) return i;
-		}
-	}
-	return -1;
+	}, true, false);
+	return result;
 }
 function getComponentKey(vm) {
 	const type = vm && vm.$ && vm.$.type;
@@ -176,70 +147,27 @@ function getComponentId(key) {
 }
 function hasScopeAttribute(selector, attrSelector) {
 	const expected = attrSelector.slice(1, -1);
-	let quote = "";
-	let comment = false;
-	for (let i = 0; i < selector.length; i += 1) {
-		const ch = selector[i];
-		const next = selector[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
+	let found = false;
+	let skipUntil = -1;
+	scanCss(selector, 0, (i, ch) => {
+		if (i <= skipUntil || ch !== "[") return;
+		const close = findMatchingBracket(selector, i);
+		if (close < 0) return false;
+		if (selector.slice(i + 1, close).trim() === expected) {
+			found = true;
+			return false;
 		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "[") {
-			const close = findMatchingBracket(selector, i);
-			if (close < 0) return false;
-			if (selector.slice(i + 1, close).trim() === expected) return true;
-			i = close;
-		}
-	}
-	return false;
+		skipUntil = close;
+	});
+	return found;
 }
 function findTrailingPseudoElement(selector) {
-	let quote = "";
-	let comment = false;
-	let square = 0;
-	let round = 0;
 	let candidate = -1;
-	for (let i = 0; i < selector.length; i += 1) {
-		const ch = selector[i];
+	scanCss(selector, 0, (i, ch, round, square) => {
 		const next = selector[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
-		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "[") square += 1;
-		else if (ch === "]") square = Math.max(0, square - 1);
-		else if (ch === "(") round += 1;
-		else if (ch === ")") round = Math.max(0, round - 1);
-		else if (square === 0 && round === 0 && ch === ":" && next === ":") candidate = i;
+		if (square === 0 && round === 0 && ch === ":" && next === ":") candidate = i;
 		else if (square === 0 && round === 0 && (ch === ">" || ch === "+" || ch === "~" || /\s/.test(ch))) candidate = -1;
-	}
+	}, true);
 	return candidate;
 }
 function addScopeAttr(selector, attrSelector) {
@@ -250,87 +178,47 @@ function addScopeAttr(selector, attrSelector) {
 	return `${value}${attrSelector}`;
 }
 function findSpecialPseudo(selector, names) {
-	let quote = "";
-	let comment = false;
-	let square = 0;
-	for (let i = 0; i < selector.length; i += 1) {
-		const ch = selector[i];
-		const next = selector[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
-		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "[") square += 1;
-		else if (ch === "]") square = Math.max(0, square - 1);
-		else if (square === 0 && ch === ":") for (const name of names) {
+	let result = null;
+	scanCss(selector, 0, (i, ch, round, square) => {
+		if (square !== 0 || ch !== ":") return;
+		for (const name of names) {
 			const token = `:${name}(`;
 			if (!selector.startsWith(token, i)) continue;
 			const open = i + token.length - 1;
 			const close = findMatchingParen(selector, open);
-			if (close >= 0) return {
-				name,
-				start: i,
-				open,
-				close
-			};
+			if (close >= 0) {
+				result = {
+					name,
+					start: i,
+					open,
+					close
+				};
+				return false;
+			}
 		}
-	}
-	return null;
+	}, true);
+	return result;
 }
 function findLegacyDeep(selector) {
-	let quote = "";
-	let comment = false;
-	let square = 0;
-	let round = 0;
-	for (let i = 0; i < selector.length; i += 1) {
-		const ch = selector[i];
-		const next = selector[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
-		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "[") square += 1;
-		else if (ch === "]") square = Math.max(0, square - 1);
-		else if (ch === "(") round += 1;
-		else if (ch === ")") round = Math.max(0, round - 1);
-		else if (square === 0 && round === 0) {
-			if (selector.startsWith("/deep/", i)) return {
+	let result = null;
+	scanCss(selector, 0, (i, ch, round, square) => {
+		if (square !== 0 || round !== 0) return;
+		if (selector.startsWith("/deep/", i)) {
+			result = {
 				index: i,
 				length: 6
 			};
-			if (selector.startsWith(">>>", i)) return {
+			return false;
+		}
+		if (selector.startsWith(">>>", i)) {
+			result = {
 				index: i,
 				length: 3
 			};
+			return false;
 		}
-	}
-	return null;
+	}, true);
+	return result;
 }
 function normalizeLegacyDeep(selector, depth = 0) {
 	if (depth > 32) return selector;
@@ -344,37 +232,10 @@ function normalizeLegacyDeep(selector, depth = 0) {
 	return normalizeLegacyDeep(normalized, depth + 1);
 }
 function splitTrailingCombinator(selector) {
-	let quote = "";
-	let comment = false;
-	let square = 0;
-	let round = 0;
 	let candidate = -1;
-	for (let i = 0; i < selector.length; i += 1) {
-		const ch = selector[i];
-		const next = selector[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
-		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(selector, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "[") square += 1;
-		else if (ch === "]") square = Math.max(0, square - 1);
-		else if (ch === "(") round += 1;
-		else if (ch === ")") round = Math.max(0, round - 1);
-		else if (square === 0 && round === 0 && (ch === ">" || ch === "+" || ch === "~")) candidate = i;
-	}
+	scanCss(selector, 0, (i, ch, round, square) => {
+		if (square === 0 && round === 0 && (ch === ">" || ch === "+" || ch === "~")) candidate = i;
+	}, true);
 	if (candidate < 0) return null;
 	const head = selector.slice(0, candidate).trimEnd();
 	const combinator = selector.slice(candidate).trim();
@@ -417,75 +278,35 @@ function scopeSelectorList(selectorText, attrSelector, slottedAttrSelector = att
 	return splitSelectors(selectorText).map((selector) => scopeSelector(selector, attrSelector, slottedAttrSelector)).join(", ");
 }
 function scanRuleBoundary(css, start) {
-	let quote = "";
-	let comment = false;
-	let round = 0;
-	let square = 0;
-	for (let i = start; i < css.length; i += 1) {
-		const ch = css[i];
-		const next = css[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
+	let result = null;
+	scanCss(css, start, (i, ch, round, square) => {
+		if (round === 0 && square === 0 && (ch === "{" || ch === ";")) {
+			result = {
+				index: i,
+				delimiter: ch
+			};
+			return false;
 		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(css, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(css, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "(") round += 1;
-		else if (ch === ")") round = Math.max(0, round - 1);
-		else if (ch === "[") square += 1;
-		else if (ch === "]") square = Math.max(0, square - 1);
-		else if (round === 0 && square === 0 && (ch === "{" || ch === ";")) return {
-			index: i,
-			delimiter: ch
-		};
-	}
-	return {
+	}, true);
+	return result ?? {
 		index: css.length,
 		delimiter: ""
 	};
 }
 function findMatchingBrace(css, openIndex) {
 	let depth = 1;
-	let quote = "";
-	let comment = false;
-	for (let i = openIndex + 1; i < css.length; i += 1) {
-		const ch = css[i];
-		const next = css[i + 1];
-		if (comment) {
-			if (ch === "*" && next === "/") {
-				comment = false;
-				i += 1;
-			}
-			continue;
-		}
-		if (quote) {
-			if (ch === "\\") i = skipCssEscape(css, i) - 1;
-			else if (ch === quote) quote = "";
-			continue;
-		}
-		if (ch === "\\") i = skipCssEscape(css, i) - 1;
-		else if (ch === "/" && next === "*") {
-			comment = true;
-			i += 1;
-		} else if (ch === "\"" || ch === "'") quote = ch;
-		else if (ch === "{") depth += 1;
+	let result = -1;
+	scanCss(css, openIndex + 1, (i, ch) => {
+		if (ch === "{") depth += 1;
 		else if (ch === "}") {
 			depth -= 1;
-			if (depth === 0) return i;
+			if (depth === 0) {
+				result = i;
+				return false;
+			}
 		}
-	}
-	return -1;
+	});
+	return result;
 }
 function getAtRuleName(prelude) {
 	const match = prelude.trim().match(/^@([\w-]+)/);
