@@ -1,4 +1,3 @@
-
 /**
  * Vue 3 浏览器端组件样式注入与 Scoped CSS 转换。
  *
@@ -80,6 +79,69 @@ function skipCssEscape(text, index) {
   return i + 1;
 }
 
+// CSS 词法扫描器：只负责识别普通词法字符，不承担查找结果或跳转协议。
+// visitor 返回 false 可提前终止；trackDepth=false 时不维护括号深度。
+function scanCss(text, start, visitor, trackDepth = false, clampDepth = true) {
+  let quote = '';
+  let comment = false;
+  let round = 0;
+  let square = 0;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (comment) {
+      if (ch === '*' && next === '/') {
+        comment = false;
+        i += 1;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (ch === '\\') {
+        i = skipCssEscape(text, i) - 1;
+      } else if (ch === quote) {
+        quote = '';
+      }
+      continue;
+    }
+
+    if (ch === '\\') {
+      i = skipCssEscape(text, i) - 1;
+      continue;
+    }
+
+    if (ch === '/' && next === '*') {
+      comment = true;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+
+    if (trackDepth) {
+      if (ch === '(') {
+        round += 1;
+      } else if (ch === ')') {
+        round = clampDepth ? Math.max(0, round - 1) : round - 1;
+      } else if (ch === '[') {
+        square += 1;
+      } else if (ch === ']') {
+        square = clampDepth ? Math.max(0, square - 1) : square - 1;
+      }
+    }
+
+    if (visitor(i, ch, round, square) === false) {
+      return;
+    }
+  }
+}
+
 function skipWhitespaceAndComments(css, start) {
   let i = start;
 
@@ -100,158 +162,43 @@ function skipWhitespaceAndComments(css, start) {
 // 按顶层分隔符切分，忽略字符串、注释、函数括号、属性选择器与 CSS 转义。
 function splitSelectors(input, delimiter = ',') {
   const parts = [];
-
   let start = 0;
-  let round = 0;
-  let square = 0;
-  let quote = '';
-  let comment = false;
 
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input[i];
-    const next = input[i + 1];
-
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
-    }
-
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(input, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
-    }
-
-    if (ch === '\\') {
-      i = skipCssEscape(input, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '(') {
-      round += 1;
-    } else if (ch === ')') {
-      round = Math.max(0, round - 1);
-    } else if (ch === '[') {
-      square += 1;
-    } else if (ch === ']') {
-      square = Math.max(0, square - 1);
-    } else if (
-      ch === delimiter &&
-      round === 0 &&
-      square === 0
-    ) {
+  scanCss(input, 0, (i, ch, round, square) => {
+    if (ch === delimiter && round === 0 && square === 0) {
       parts.push(input.slice(start, i).trim());
       start = i + 1;
     }
-  }
+  }, true);
 
   parts.push(input.slice(start).trim());
-
   return parts.filter(Boolean);
 }
 
 function findMatchingParen(text, openIndex) {
-  let depth = 0;
-  let quote = '';
-  let comment = false;
+  let result = -1;
 
-  for (let i = openIndex; i < text.length; i += 1) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
+  scanCss(text, openIndex, (i, ch, round) => {
+    if (ch === ')' && round === 0) {
+      result = i;
+      return false;
     }
+  }, true, false);
 
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(text, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
-    }
-
-    if (ch === '\\') {
-      i = skipCssEscape(text, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '(') {
-      depth += 1;
-    } else if (ch === ')') {
-      depth -= 1;
-
-      if (depth === 0) return i;
-    }
-  }
-
-  return -1;
+  return result;
 }
 
 function findMatchingBracket(text, openIndex) {
-  let depth = 0;
-  let quote = '';
-  let comment = false;
+  let result = -1;
 
-  for (let i = openIndex; i < text.length; i += 1) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
+  scanCss(text, openIndex, (i, ch, round, square) => {
+    if (ch === ']' && square === 0) {
+      result = i;
+      return false;
     }
+  }, true, false);
 
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(text, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
-    }
-
-    if (ch === '\\') {
-      i = skipCssEscape(text, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '[') {
-      depth += 1;
-    } else if (ch === ']') {
-      depth -= 1;
-
-      if (depth === 0) return i;
-    }
-  }
-
-  return -1;
+  return result;
 }
 
 // ---- Component identity ----
@@ -280,108 +227,38 @@ function getComponentId(key) {
 // 判断选择器中是否已存在目标属性；不用 includes()，避免值/字符串/注释里的同文本误判。
 function hasScopeAttribute(selector, attrSelector) {
   const expected = attrSelector.slice(1, -1);
+  let found = false;
+  let skipUntil = -1;
 
-  let quote = '';
-  let comment = false;
+  scanCss(selector, 0, (i, ch) => {
+    if (i <= skipUntil || ch !== '[') return;
 
-  for (let i = 0; i < selector.length; i += 1) {
-    const ch = selector[i];
-    const next = selector[i + 1];
+    const close = findMatchingBracket(selector, i);
 
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
+    // 保留原实现语义：遇到未闭合的属性选择器，放弃整个判断。
+    if (close < 0) {
+      return false;
     }
 
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(selector, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
+    if (selector.slice(i + 1, close).trim() === expected) {
+      found = true;
+      return false;
     }
 
-    if (ch === '\\') {
-      i = skipCssEscape(selector, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '[') {
-      const close = findMatchingBracket(selector, i);
+    skipUntil = close;
+  });
 
-      if (close < 0) return false;
-
-      if (selector.slice(i + 1, close).trim() === expected) {
-        return true;
-      }
-
-      i = close;
-    }
-  }
-
-  return false;
+  return found;
 }
 
 // 定位最后一个复合选择器中的伪元素；参数里的括号、字符串、属性选择器不干扰定位。
 function findTrailingPseudoElement(selector) {
-  let quote = '';
-  let comment = false;
-  let square = 0;
-  let round = 0;
   let candidate = -1;
 
-  for (let i = 0; i < selector.length; i += 1) {
-    const ch = selector[i];
+  scanCss(selector, 0, (i, ch, round, square) => {
     const next = selector[i + 1];
 
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
-    }
-
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(selector, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
-    }
-
-    if (ch === '\\') {
-      i = skipCssEscape(selector, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '[') {
-      square += 1;
-    } else if (ch === ']') {
-      square = Math.max(0, square - 1);
-    } else if (ch === '(') {
-      round += 1;
-    } else if (ch === ')') {
-      round = Math.max(0, round - 1);
-    } else if (
-      square === 0 &&
-      round === 0 &&
-      ch === ':' &&
-      next === ':'
-    ) {
+    if (square === 0 && round === 0 && ch === ':' && next === ':') {
       candidate = i;
     } else if (
       square === 0 &&
@@ -390,7 +267,7 @@ function findTrailingPseudoElement(selector) {
     ) {
       candidate = -1;
     }
-  }
+  }, true);
 
   return candidate;
 }
@@ -417,120 +294,48 @@ function addScopeAttr(selector, attrSelector) {
 
 // 查找特殊伪类；字符串、注释和属性选择器内不识别。
 function findSpecialPseudo(selector, names) {
-  let quote = '';
-  let comment = false;
-  let square = 0;
+  let result = null;
 
-  for (let i = 0; i < selector.length; i += 1) {
-    const ch = selector[i];
-    const next = selector[i + 1];
+  scanCss(selector, 0, (i, ch, round, square) => {
+    if (square !== 0 || ch !== ':') return;
 
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
+    for (const name of names) {
+      const token = `:${name}(`;
 
-      continue;
-    }
+      if (!selector.startsWith(token, i)) continue;
 
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(selector, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
+      const open = i + token.length - 1;
+      const close = findMatchingParen(selector, open);
 
-      continue;
-    }
-
-    if (ch === '\\') {
-      i = skipCssEscape(selector, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '[') {
-      square += 1;
-    } else if (ch === ']') {
-      square = Math.max(0, square - 1);
-    } else if (square === 0 && ch === ':') {
-      for (const name of names) {
-        const token = `:${name}(`;
-
-        if (!selector.startsWith(token, i)) continue;
-
-        const open = i + token.length - 1;
-        const close = findMatchingParen(selector, open);
-
-        if (close >= 0) {
-          return { name, start: i, open, close };
-        }
+      if (close >= 0) {
+        result = { name, start: i, open, close };
+        return false;
       }
     }
-  }
+  }, true);
 
-  return null;
+  return result;
 }
 
 // 查找顶层历史 deep 组合符；字符串、注释、属性选择器和函数参数内不识别。
 function findLegacyDeep(selector) {
-  let quote = '';
-  let comment = false;
-  let square = 0;
-  let round = 0;
+  let result = null;
 
-  for (let i = 0; i < selector.length; i += 1) {
-    const ch = selector[i];
-    const next = selector[i + 1];
+  scanCss(selector, 0, (i, ch, round, square) => {
+    if (square !== 0 || round !== 0) return;
 
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
+    if (selector.startsWith('/deep/', i)) {
+      result = { index: i, length: 6 };
+      return false;
     }
 
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(selector, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
+    if (selector.startsWith('>>>', i)) {
+      result = { index: i, length: 3 };
+      return false;
     }
+  }, true);
 
-    if (ch === '\\') {
-      i = skipCssEscape(selector, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '[') {
-      square += 1;
-    } else if (ch === ']') {
-      square = Math.max(0, square - 1);
-    } else if (ch === '(') {
-      round += 1;
-    } else if (ch === ')') {
-      round = Math.max(0, round - 1);
-    } else if (square === 0 && round === 0) {
-      if (selector.startsWith('/deep/', i)) {
-        return { index: i, length: 6 };
-      }
-
-      if (selector.startsWith('>>>', i)) {
-        return { index: i, length: 3 };
-      }
-    }
-  }
-
-  return null;
+  return result;
 }
 
 // 历史 deep 组合符统一成 :deep()：右侧整体作为参数，避免 scope 落到右边。
@@ -560,58 +365,17 @@ function normalizeLegacyDeep(selector, depth = 0) {
 
 // 查找选择器末尾的显式组合器。
 function splitTrailingCombinator(selector) {
-  let quote = '';
-  let comment = false;
-  let square = 0;
-  let round = 0;
   let candidate = -1;
 
-  for (let i = 0; i < selector.length; i += 1) {
-    const ch = selector[i];
-    const next = selector[i + 1];
-
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
-    }
-
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(selector, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
-    }
-
-    if (ch === '\\') {
-      i = skipCssEscape(selector, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '[') {
-      square += 1;
-    } else if (ch === ']') {
-      square = Math.max(0, square - 1);
-    } else if (ch === '(') {
-      round += 1;
-    } else if (ch === ')') {
-      round = Math.max(0, round - 1);
-    } else if (
+  scanCss(selector, 0, (i, ch, round, square) => {
+    if (
       square === 0 &&
       round === 0 &&
       (ch === '>' || ch === '+' || ch === '~')
     ) {
       candidate = i;
     }
-  }
+  }, true);
 
   if (candidate < 0) return null;
 
@@ -722,106 +486,40 @@ function scopeSelectorList(
 
 // 查找顶层规则边界。
 function scanRuleBoundary(css, start) {
-  let quote = '';
-  let comment = false;
-  let round = 0;
-  let square = 0;
+  let result = null;
 
-  for (let i = start; i < css.length; i += 1) {
-    const ch = css[i];
-    const next = css[i + 1];
-
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
-    }
-
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(css, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
-    }
-
-    if (ch === '\\') {
-      i = skipCssEscape(css, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '(') {
-      round += 1;
-    } else if (ch === ')') {
-      round = Math.max(0, round - 1);
-    } else if (ch === '[') {
-      square += 1;
-    } else if (ch === ']') {
-      square = Math.max(0, square - 1);
-    } else if (
+  scanCss(css, start, (i, ch, round, square) => {
+    if (
       round === 0 &&
       square === 0 &&
       (ch === '{' || ch === ';')
     ) {
-      return { index: i, delimiter: ch };
+      result = { index: i, delimiter: ch };
+      return false;
     }
-  }
+  }, true);
 
-  return { index: css.length, delimiter: '' };
+  return result ?? { index: css.length, delimiter: '' };
 }
 
 function findMatchingBrace(css, openIndex) {
   let depth = 1;
-  let quote = '';
-  let comment = false;
+  let result = -1;
 
-  for (let i = openIndex + 1; i < css.length; i += 1) {
-    const ch = css[i];
-    const next = css[i + 1];
-
-    if (comment) {
-      if (ch === '*' && next === '/') {
-        comment = false;
-        i += 1;
-      }
-
-      continue;
-    }
-
-    if (quote) {
-      if (ch === '\\') {
-        i = skipCssEscape(css, i) - 1;
-      } else if (ch === quote) {
-        quote = '';
-      }
-
-      continue;
-    }
-
-    if (ch === '\\') {
-      i = skipCssEscape(css, i) - 1;
-    } else if (ch === '/' && next === '*') {
-      comment = true;
-      i += 1;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '{') {
+  scanCss(css, openIndex + 1, (i, ch) => {
+    if (ch === '{') {
       depth += 1;
     } else if (ch === '}') {
       depth -= 1;
 
-      if (depth === 0) return i;
+      if (depth === 0) {
+        result = i;
+        return false;
+      }
     }
-  }
+  });
 
-  return -1;
+  return result;
 }
 
 function getAtRuleName(prelude) {

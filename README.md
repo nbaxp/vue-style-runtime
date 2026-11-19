@@ -117,7 +117,7 @@ CSS 改写、VNode 标记、样式注入等函数均为内部实现，不再导�
 - 追加的属性选择器会提高优先级，没有 `:where()` 降权。
 - 不做预处理：`lang="scss"` 等属性会保留，但内容不会被编译。
 
-## 从 0.5.x 升级（0.6.0 起，当前 1.0.1）
+## 从 0.5.x 升级（0.6.0 起，当前 1.0.2）
 
 0.6.0 只保留运行时 mixin：底层函数（`addStyles`、`scopeCss`、`scopeSelector` 等）不再导出，原先单独调用的用法改为挂载 `styleMixin`；同时移除 Vue 2 支持（`destroyed`、Vue 2 VNode 字段与 `constructor.options` 回退全部删除），`peerDependencies` 收紧为 `vue: ^3.0.0`。组件身份现在只认 `$.type`，同一组件定义的实例仍共享样式节点。1.0.0 未改动公共 API，仍只导出默认导出与 `styleMixin`。
 
@@ -188,6 +188,63 @@ npm test   # node --test "tests/**/*.test.js"，jsdom 环境
 ```
 
 覆盖注入与计数、回滚、选择器改写、at-rule、转义与容错、Vue 3 VNode 归属与生命周期。测试只通过 `styleMixin` 的公共入口驱动。`tests/` 与 jsdom 只用于开发；发布 `files` 为 `dist/index.js` 与 `dist/index.min.js`（README 由 npm 自动包含）。
+
+## 性能基准
+
+```bash
+npm run bench   # node benchmarks/css.bench.mjs
+```
+
+微基准，分两部分：
+
+| 部分 | 测什么 | scope 维度 | 复杂度维度 |
+| ---- | ------ | ---------- | ---------- |
+| Part 1 核心转换 | 内部 `scopeCss` 纯函数，无 DOM 开销 | `no-scope`（需追加作用域）/ `with-scope`（已带属性、早退） | simple / medium / complex |
+| Part 2 端到端注入 | `styleMixin` 公共入口 + jsdom | `scoped` / `plain` | simple / medium / complex |
+
+每格为 7 轮、每轮 300 次调用的中位数，计时前预热。输入分三档：simple 为单条规则，medium 含 `:deep` / `:slotted` / `:global` 与多选择器，complex 含属性选择器、字符串、注释、CSS 转义、历史 `/deep/` 与 `>>>`、分组 at-rule 嵌套和 `@keyframes`。
+
+读数的几个要点：
+
+- **绝对值受机器与负载影响**，跨次运行、跨机器不可直接比；同一份输出内的倍率和组间对比更可参考。
+- **DOM 注入主导端到端成本**：jsdom 下 `scoped` 的 simple 规则里，绝大部分耗时是 `importNode` / `appendChild`，CSS 转换本身只占很小一部分；复杂度升高后转换成本才逐步显现。
+- **`with-scope` 不比 `no-scope` 快**：早退只省掉"追加属性"这一步，输入文本更长、仍须全量扫描，差异通常淹没在噪声里。
+- **`plain` 仍需注入**：无 `scoped` 时跳过 CSS 转换，但大文本节点的 DOM 开销仍在，complex 下与 `scoped` 差距会缩小。
+
+### 判定标准
+
+脚本带基线回归判定，命令：
+
+```bash
+npm run bench                          # 首轮：生成基线；之后：与基线对比并判定
+npm run bench -- --update-baseline     # 用当前结果覆盖基线（代码或环境变化后重建）
+npm run bench -- --tolerance=0.3       # 自定义阈值，默认 0.2（+20%）
+```
+
+基线存于 `benchmarks/baseline.json`，已加入 `.gitignore`，只在本地生成、不入库。它记录每个用例的中位值与各轮采样，并附带环境指纹（Node 版本、平台、架构、CPU）和阈值配置。
+
+判定采用**相对阈值 + 绝对噪声地板**双门槛，逐用例独立判断：
+
+- **SLOWER**（回归）：当前值比基线慢超过 `tolerance`（默认 +20%）**且**绝对增量大于噪声地板（默认 0.01ms，并取基线自身抖动范围的两倍作为第二重地板）。出现任一 SLOWER，进程退出码为 1，便于接入脚本或 CI。
+- **FASTER**：快超过阈值，仅记录，不算失败。
+- **OK**：其余情况。亚毫秒级、低于地板的波动一律判 OK，不因噪声误报。
+
+之所以用双门槛：simple 用例本身只有几微秒，纯百分比会让 ±10% 的抖动触发误报；绝对地板过滤掉这类无实际意义的差异。
+
+**环境指纹不一致时（Node / 平台 / 架构 / CPU 任一不同）只显示数值、跳过 PASS/FAIL**——跨机器绝对值不可比，换机器需先 `--update-baseline` 重建基线。基线只用于同一环境下的纵向对比，不要拿它比较不同机器。
+
+参考区间（本机 Node v22.22.2 / win32 x64 / i7-12700H，7 轮 × 300 次中位数，仅供量级参照，**不是合格线**）：
+
+| 部分 | 场景 | simple | medium | complex |
+| ---- | ---- | ------ | ------ | ------- |
+| Part 1 核心转换 | no-scope | ~0.002 ms | ~0.009 ms | ~0.13 ms |
+| Part 1 核心转换 | with-scope | ~0.003 ms | ~0.008 ms | ~0.14 ms |
+| Part 2 端到端注入 | scoped | ~0.12–0.52 ms | ~0.14–0.50 ms | ~1.6–4.2 ms |
+| Part 2 端到端注入 | plain | ~0.05–0.19 ms | ~0.08–0.31 ms | ~1.3–3.8 ms |
+
+这些区间跨轮波动明显（端到端场景受 jsdom 与机器负载影响可达数倍），因此判定依赖本地基线而非写死的绝对数值。
+
+实现上，内部函数未公开导出，基准脚本在内存中给源码追加一条导出、以 data URL 加载，**不修改 `index.js`，也不改变公共 API**。`benchmarks/` 与 jsdom 只用于开发，不进入 npm 发布内容。
 
 ## 发布
 
