@@ -53,7 +53,7 @@ export default {
 | `.a:is(.b, .c) .d`          | `.a:is(.b, .c) .d[attr]`       | `:is()` / `:where()` / `:not()` 括号内的逗号不切分                                |
 | `[data-label="a,b"] .x`     | `[data-label="a,b"] .x[attr]`  | 属性选择器、引号与注释内的逗号不切分；已存在同名属性时不重复追加                  |
 | `.\31 23 .x`                | `.\31 23 .x[attr]`             | 引号外的 CSS 转义整体跳过，不参与切分                                             |
-| `&:hover`                   | `&:hover[attr]`                | 原生 `&` 只改写当前复合选择器；嵌套块 body 原样交给浏览器 CSS nesting，不二次改写 |
+| `&:hover`（顶层）           | `&:hover[attr]`                | 顶层 `&` 只改写当前复合选择器；作为规则体出现的 `&` 见下节「CSS nesting」         |
 | `.a > :deep(.b)`            | `.a[attr] > .b`                | 只作用域化左侧，`>` 组合器保留                                                    |
 | `.a :deep(.b, .c)`          | `.a[attr] .b, .a[attr] .c`     | `:deep()` 多参数展开为多条                                                        |
 | `.a :slotted(.b)`           | `.a .b[attr-s]`                | 只给插槽目标加 `-s`，外层不加普通 scope                                           |
@@ -68,6 +68,45 @@ export default {
 - 语句型 `@import`、`@charset`（以 `;` 结束）原样保留，其后的规则继续作用域化。
 - 其它 at-rule 声明块（`@font-face`、`@page`、`@property` 等）原样保留，不转换。
 - 非法或残缺 CSS（找不到 `{`、大括号不配对）不抛错，从问题位置起原样保留。
+- 分组 at-rule 内的规则体递归处理，其中的嵌套选择器同样按「CSS nesting」一节改写。
+
+## CSS nesting
+
+规则体（`{ ... }`）内的选择器会递归处理，而不是原样交给浏览器——因为 Vue 的特殊伪类（`:deep()` 等）浏览器并不认识，原样保留会导致整条规则被丢弃。浏览器只按 CSS Nesting 规则把内层选择器与父选择器组合（并不理解组件 scope），而父选择器已经带有 scope，所以内层只处理自身需要的"增量"：
+
+| 输入（位于规则体内） | 输出 | 说明 |
+| --- | --- | --- |
+| `.title` | `.title[attr]` | 普通复合也加 scope，避免穿透命中子组件内部元素 |
+| `&:hover` | `&:hover` | `&` 展开为已带 scope 的父选择器，不重复追加 |
+| `& .title` | `& .title[attr]` | `&` 本身不加，其后代目标仍加 |
+| `:deep(.icon)` | `.icon` | 脱壳，穿透目标不加 scope |
+| `.wrapper :deep(.x)` | `.wrapper[attr] .x` | 只作用域化左侧，穿透目标保持原样 |
+| `.wrapper :slotted(.item)` | `.wrapper .item[attr-s]` | **左侧不加普通 scope**，只给插槽目标加 `-s`（对齐 Vue 官方） |
+| `.wrapper :global(.x)` | `.wrapper .x` | **左侧原样不补 scope**，参数脱壳（项目扩展；Vue 官方会丢弃左侧） |
+| `:global(.x)` | `.x` | 完全脱壳，不给目标追加 scope（见下方 nesting 限制） |
+| `>>>` / `/deep/` | 同 `:deep()` | 先归一化再脱壳 |
+
+三类特殊伪类的左侧处理**有意不同**，与 Vue 官方编译器（`@vue/compiler-sfc`）一致：`:deep()` 只作用域化左侧；`:slotted()` 只给目标加 `-s`、左侧不加普通 scope；`:global()` 不给目标追加 scope。因此"普通复合追加 scope"只适用于无特殊伪类的普通嵌套选择器与 `:deep()` 左侧——`:slotted()` / `:global()` 左侧不追加并非遗漏。
+
+**`:global()` 在 nesting 中的语义边界**：本改写器不改变原生 nesting 结构，`:global()` 只能做到"不给目标追加 scope"，**不能让整条规则脱离父选择器作用域**。例如 `.parent { :global(.external) {} }` 脱壳为 `.parent[attr] { .external {} }`，浏览器按 CSS Nesting 组合后等价于 `.parent[attr] .external`，**不是全局的 `.external`**。要真正脱离父作用域必须把内层规则提升为顶层，本改写器不提供该能力。
+
+- 多参数 `:deep(.a, .b)` 展开为多条；白空格保留，避免多余格式 diff。
+- **所有特殊伪类都会脱壳**，包括串联和参数内嵌套两种形态：`:deep(.a) :deep(.b)` → `.a .b`、`:deep(:global(.item))` → `.item`、`:slotted(:deep(.item))` → `.item[attr-s]`。残留任意一个浏览器不认识的伪类都会让整条规则失效，因此伪类之后与其参数内部都会递归脱壳。
+- 深层嵌套逐层作用域化；keyframes 体内的 `from` / `to` 不改写。
+- 依赖浏览器原生 CSS nesting，最低版本：Chrome 112+ / Safari 17.2+ / Firefox 121+。
+
+### 自定义属性的值含花括号
+
+CSS 自定义属性（`--name`）的值允许包含配对花括号（值按 token 序列处理），例如主题对象 `--tokens: { color: red; }`。这类花括号属于值而非规则体，整段声明原样保留、不递归、不加 scope：
+
+| 输入 | 输出 |
+| --- | --- |
+| `.a { --x: { color: red; }; }` | `.a[attr]{ --x: { color: red; }; }` |
+| `.a { --x: { a: 1; } { b: 2; }; }` | 原样保留两个花括号块 |
+
+花括号需正确配对；配对失败时按不完整 CSS 保留原文。普通属性（如 `color`）的值不含花括号，不受影响。值里函数或方括号内的分号（如 `--x: { value: fn(a; b); }`）不会被误判为声明结束——花括号计数与分号终止分开处理，只有圆括号、方括号、花括号深度都回到 0 的分号才结束声明。
+
+属性名按 CSS `<ident>` 的常见形态保守识别：ASCII 字母数字、`-`、`_`、非 ASCII 字符及反斜杠转义均可，例如 `--变量: { … }`、`--x\:esc: { … }` 都原样保留。这是保守匹配而非完整的 ident 解析器——名称必须紧跟 `--` 且非空；前置注释等装饰性内容不在识别范围内，这类 prelude 本就不会被当作规则体改写，交由通用分支原样保留。
 
 ## 作用域归属
 
@@ -79,7 +118,7 @@ export default {
 - 子组件内部的普通元素不加当前组件 scope。
 - 最后对 `$el` 兜底打属性；Fragment 的注释锚点因 `nodeType !== 1` 被忽略。
 
-Fragment 单根：过滤 `type` 为 `Symbol` 的子节点（Comment / Text / 内层 Fragment）后只剩一个有效节点才作为继承根，多根不继承。
+Fragment 单根：Comment / Text 与 Fragment 的 `type` 都是 `Symbol`，按结构区分——Fragment 的 `children` 是 VNode 数组，Comment / Text 的 `children` 是字符串。解析时过滤 Comment / Text、对 Fragment 递归下钻，只剩一个有效元素根才继承 scope，多根不继承。嵌套 Fragment（`<><><span/></></>`）因此也能找到唯一根；空 Fragment / 内含多根一律不继承。
 
 依赖的 Vue 3 字段：`$.type`、`$.subTree`、`vnode.component`、`vnode.ctx`、`instance.parent`、`instance.proxy`、`vnode.el`、`ssContent` / `ssFallback`、`$el`。
 
@@ -110,7 +149,7 @@ CSS 改写、VNode 标记、样式注入等函数均为内部实现，不再导�
 
 - 只扫描 `styles` 顶层直接子元素（`template.content.children`）：顶层文本与注释丢弃，包在其它元素内的 `<style>` / `<link>` 不会被识别。
 - `<link>` 不等待加载，首屏可能出现无样式闪烁。
-- 原生 `&` 依赖浏览器 CSS nesting，最低版本：Chrome 112+ / Safari 17.2+ / Firefox 121+；更低版本下嵌套规则不生效。
+- CSS nesting（含规则体内的嵌套选择器与 `&`）依赖浏览器支持，最低版本：Chrome 112+ / Safari 17.2+ / Firefox 121+；更低版本下嵌套规则不生效。
 - 依赖 Vue 3 非公开字段：`$.type`、`$.subTree`、`vnode.component`、`vnode.ctx`、`parent`、`proxy`、`vnode.el`、`ssContent` / `ssFallback`、`$el`。升级 Vue 大版本需回归 scoped 用例。
 - `styles` 在 `created` 只读一次，实例运行期修改不生效；每次新建 options 对象会得到新的组件身份并重复注入。
 - 样式节点被外部移除后不会恢复；实例卸载也不会清除元素上已打的属性，被手工复用的节点会保留旧属性。
@@ -233,16 +272,16 @@ npm run bench -- --tolerance=0.3       # 自定义阈值，默认 0.2（+20%）
 
 **环境指纹不一致时（Node / 平台 / 架构 / CPU 任一不同）只显示数值、跳过 PASS/FAIL**——跨机器绝对值不可比，换机器需先 `--update-baseline` 重建基线。基线只用于同一环境下的纵向对比，不要拿它比较不同机器。
 
-参考区间（本机 Node v22.22.2 / win32 x64 / i7-12700H，7 轮 × 300 次中位数，仅供量级参照，**不是合格线**）：
+参考数值（本机 Node v22.22.2 / win32 x64 / i7-12700H，7 轮 × 300 次中位数，2026-11-21 随当前代码重建基线后实测，仅供量级参照，**不是合格线**）：
 
 | 部分 | 场景 | simple | medium | complex |
 | ---- | ---- | ------ | ------ | ------- |
-| Part 1 核心转换 | no-scope | ~0.002 ms | ~0.009 ms | ~0.13 ms |
-| Part 1 核心转换 | with-scope | ~0.003 ms | ~0.008 ms | ~0.14 ms |
-| Part 2 端到端注入 | scoped | ~0.12–0.52 ms | ~0.14–0.50 ms | ~1.6–4.2 ms |
-| Part 2 端到端注入 | plain | ~0.05–0.19 ms | ~0.08–0.31 ms | ~1.3–3.8 ms |
+| Part 1 核心转换 | no-scope | ~0.003 ms | ~0.014 ms | ~0.19 ms |
+| Part 1 核心转换 | with-scope | ~0.004 ms | ~0.0094 ms | ~0.18 ms |
+| Part 2 端到端注入 | scoped | ~0.16 ms | ~0.14 ms | ~1.73 ms |
+| Part 2 端到端注入 | plain | ~0.052 ms | ~0.084 ms | ~1.33 ms |
 
-这些区间跨轮波动明显（端到端场景受 jsdom 与机器负载影响可达数倍），因此判定依赖本地基线而非写死的绝对数值。
+代码或环境变化后需 `--update-baseline` 重建；本表对应重建后的基线。跨轮波动明显（complex 端到端受 jsdom 与机器负载影响，单次可在 ±40% 以上摆动——重建前的对比中 `with-scope complex` 曾连续出现 +37.9% / +33.7% 的 SLOWER 判定，重跑即回落到 +20.9% 的 OK），因此判定依赖本地基线而非写死的绝对数值。
 
 实现上，内部函数未公开导出，基准脚本在内存中给源码追加一条导出、以 data URL 加载，**不修改 `index.js`，也不改变公共 API**。`benchmarks/` 与 jsdom 只用于开发，不进入 npm 发布内容。
 

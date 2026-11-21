@@ -5,8 +5,21 @@
  * 改写普通选择器与 :deep() / :slotted() / :global()、历史 /deep/ 与 >>>，
  * 递归处理分组 at-rule、跳过 keyframes，扫描时感知字符串、注释、括号与转义。
  *
- * 不替代 @vue/compiler-sfc，不转换规则体内的 CSS nesting；
+ * 不替代 @vue/compiler-sfc；规则体内的 CSS nesting 会就地处理：特殊伪类脱壳、
+ * 普通嵌套选择器追加 scope、& 主导的复合沿用父作用域；
  * styles 为组件定义级静态配置，实例运行期修改不生效。
+ *
+ * 设计边界（供静态审查参考）：
+ * 1. 这是一个选择器改写器，不是 CSS 解析器。递归只用于分组 at-rule 与规则体
+ *    nesting；自定义属性值里允许出现配对花括号，遇到时整段原样保留（见
+ *    isCustomPropertyDeclaration / findCustomPropertyEnd），不当作规则体。
+ * 2. 作用域采用"给每个目标复合选择器追加属性"的策略，不做祖先限定；
+ *    nesting 中内层选择器同样追加 scope，避免穿透命中未标记的后代元素。
+ *    该策略仅针对普通选择器；:slotted()/:global() 的左侧刻意不加 scope，
+ *    :deep() 只作用域化左侧——与 Vue 官方编译器语义一致（见 nesting helpers）。
+ * 3. :deep() / :slotted() / :global() 是编译期伪类，浏览器不识别，必须全部
+ *    脱壳——残留任意一个都会导致整条规则被浏览器丢弃。脱壳同时覆盖串联、
+ *    参数内部嵌套（:deep(:global(.x))）两种形态，由 unwrapSpecialText 递归完成。
  */
 
 const styleCounterName = 'data-vue-component-instances';
@@ -389,18 +402,49 @@ function splitTrailingCombinator(selector) {
   return { head, combinator };
 }
 
+// 递归脱壳一段选择器中出现的全部特殊伪类（顶层与 nesting 共用），包括
+// 参数内部嵌套的情况，例如 :deep(:global(.item)) -> .item。
+// 背景：:deep() / :slotted() / :global() 是 Vue 的编译期伪类，浏览器不认识；
+// 只要有一个残留在输出里，整条规则会被浏览器丢弃（不是局部失效）。
+// 这里只做脱壳，不追加普通 scope：调用方位于穿透/逃逸区，普通选择器原样保留；
+// :slotted() 例外，仍给其目标加 -s。before 与 rest 同样递归，覆盖同一层串联
+// 和参数内部嵌套两种形态。depth 是递归护栏（异常输入下防止无限脱壳）。
+function unwrapSpecialText(text, slottedAttrSelector, depth = 0) {
+  if (depth > 32) return text;
+
+  const special = findSpecialPseudo(text, ['deep', 'slotted', 'global']);
+
+  if (!special) return text;
+
+  const before = text.slice(0, special.start);
+  const inner = text.slice(special.open + 1, special.close);
+  const rest = text.slice(special.close + 1);
+  // inner 内部还可能再嵌特殊伪类；对每一段递归脱壳后重新按逗号拆分，
+  // 保证参数展开出的多个目标都能各自参与外层的 scope 策略。
+  const unwrapped = splitSelectors(inner)
+    .flatMap((item) =>
+      splitSelectors(unwrapSpecialText(item, slottedAttrSelector, depth + 1)),
+    )
+    .map((item) =>
+      special.name === 'slotted'
+        ? addScopeAttr(item, slottedAttrSelector)
+        : item,
+    )
+    .join(', ');
+
+  return (
+    `${before}${unwrapped}` +
+    unwrapSpecialText(rest, slottedAttrSelector, depth + 1)
+  );
+}
+
 // 单个选择器：普通选择器加普通 scope；:deep(X) 只作用域化左侧；
 // :slotted(X) 只给 X 加 -s；:global(X) 展开且不加 scope（本项目扩展）。
-function transformSelector(
-  selector,
-  attrSelector,
-  slottedAttrSelector,
-  depth = 0,
-) {
-  if (depth > 32) {
-    return addScopeAttr(selector, attrSelector);
-  }
-
+// 特殊伪类可串联或参数内嵌套，inner / after 都交给 unwrapSpecialText 递归脱壳。
+// 左侧作用域策略与 Vue 官方一致：deep 作用域化左侧、slotted 左侧不加普通 scope、
+// global 整条规则不参与作用域——仅指顶层规则（nesting 内的限制见下方 nesting helpers：
+// 父选择器仍参与浏览器组合，:global() 只能做到不给目标追加 scope）。
+function transformSelector(selector, attrSelector, slottedAttrSelector) {
   const special = findSpecialPseudo(
     selector,
     ['deep', 'slotted', 'global'],
@@ -413,23 +457,27 @@ function transformSelector(
   const before = selector.slice(0, special.start);
   const inner = selector.slice(special.open + 1, special.close);
   const after = selector.slice(special.close + 1);
-
-  const innerSelectors = splitSelectors(inner);
+  // 递归脱壳尾部与参数内部剩余的特殊伪类，避免残留伪类导致整条规则被丢弃。
+  const tail = unwrapSpecialText(after, slottedAttrSelector);
+  // inner 里的参数可能再嵌特殊伪类（如 :deep(:global(.item))），先递归脱壳。
+  const innerSelectors = splitSelectors(inner).flatMap((item) =>
+    splitSelectors(unwrapSpecialText(item, slottedAttrSelector)),
+  );
 
   if (special.name === 'global') {
     // 项目约定：保留外层文本，但不添加普通 scope。
     return innerSelectors
-      .map((item) => `${before}${item}${after}`)
+      .map((item) => `${before}${item}${tail}`)
       .join(', ');
   }
 
   if (special.name === 'slotted') {
-    // 官方语义：只给插槽目标添加 -s，外层不加普通 scope。
+    // 官方语义：只给插槽目标添加 -s，左侧不加普通 scope（与 Vue 一致）。
     return innerSelectors
       .map((item) => {
         const slotted = addScopeAttr(item, slottedAttrSelector);
 
-        return `${before}${slotted}${after}`;
+        return `${before}${slotted}${tail}`;
       })
       .join(', ');
   }
@@ -450,7 +498,7 @@ function transformSelector(
   }
 
   return innerSelectors
-    .map((item) => `${scopedLeft} ${item}${after}`.trim())
+    .map((item) => `${scopedLeft} ${item}${tail}`.trim())
     .join(', ');
 }
 
@@ -480,6 +528,127 @@ function scopeSelectorList(
       scopeSelector(selector, attrSelector, slottedAttrSelector),
     )
     .join(', ');
+}
+
+// ---- Nested rule (CSS nesting) helpers ----
+// 嵌套 body 内的选择器由浏览器原生 CSS Nesting 机制与父选择器组合。
+// 父选择器已经添加组件 scope，因此这里仅处理嵌套选择器自身需要的 scope。
+// 注意：浏览器只按 CSS Nesting 规则做选择器组合（& 展开为父、否则视为后代），
+// 它并不理解"组件 scope"这个概念，scope 全靠改写后的选择器文本本身携带。
+//
+// 左侧作用域策略与 Vue 官方（@vue/compiler-sfc）对齐，三类特殊伪类各有语义：
+//   - :deep(X)      只作用域化左侧（.w :deep(.x) -> .w[attr] .x）；
+//   - :slotted(X)   只给插槽目标加 -s，左侧不加普通 scope（官方行为）；
+//   - :global(X)    只不给 X 追加组件 scope、参数脱壳（项目扩展）。注意这里
+//                   不能让整条规则脱离作用域：原生 CSS nesting 下父选择器仍会
+//                   参与浏览器的选择器组合，故 .p { :global(.x) {} } 脱壳后是
+//                   .p[attr] { .x {} }，浏览器组合为 .p[attr] .x，并非全局 .x。
+//                   要真正脱离父作用域只能提升为顶层规则，本改写器不改变 nesting
+//                   结构，故不提供该能力。
+// 因此"普通复合追加 scope"仅适用于没有特殊伪类的普通嵌套选择器，以及
+// :deep() 的左侧；:slotted()/:global() 的左侧刻意不加 scope，并非遗漏。
+// & 主导的复合不重复追加（& 展开后已带父级 scope）。
+
+// 最后一个复合选择器若以 & 开头，& 展开为已带 scope 的父选择器，不再重复追加。
+function addNestedScope(selector, attrSelector) {
+  const value = selector.trim();
+
+  if (!value) return value;
+
+  let lastStart = 0;
+
+  scanCss(value, 0, (i, ch, round, square) => {
+    if (
+      round === 0 &&
+      square === 0 &&
+      (ch === '>' || ch === '+' || ch === '~' || /\s/.test(ch))
+    ) {
+      lastStart = i + 1;
+    }
+  }, true);
+
+  if (value.slice(lastStart).trimStart().startsWith('&')) {
+    return value;
+  }
+
+  return addScopeAttr(value, attrSelector);
+}
+
+// 嵌套 body 中的单个选择器。与顶层 transformSelector 的处理规则一致，
+// 差别只在左侧 scoping 用 addNestedScope（& 主导时不重复加 scope）。
+function scopeNestedSelector(
+  selector,
+  attrSelector,
+  slottedAttrSelector = attrSelector,
+) {
+  const value = normalizeLegacyDeep(selector.trim());
+
+  if (!value) return value;
+
+  const special = findSpecialPseudo(value, ['deep', 'slotted', 'global']);
+
+  if (!special) {
+    return addNestedScope(value, attrSelector);
+  }
+
+  const before = value.slice(0, special.start);
+  const inner = value.slice(special.open + 1, special.close);
+  const after = value.slice(special.close + 1);
+  // 与顶层共用同一套递归脱壳逻辑，保证串联与参数内嵌套行为一致。
+  const tail = unwrapSpecialText(after, slottedAttrSelector);
+  const innerSelectors = splitSelectors(inner).flatMap((item) =>
+    splitSelectors(unwrapSpecialText(item, slottedAttrSelector)),
+  );
+
+  if (special.name === 'global') {
+    return innerSelectors
+      .map((item) => `${before}${item}${tail}`)
+      .join(', ');
+  }
+
+  if (special.name === 'slotted') {
+    return innerSelectors
+      .map((item) => {
+        const slotted = addScopeAttr(item, slottedAttrSelector);
+        return `${before}${slotted}${tail}`;
+      })
+      .join(', ');
+  }
+
+  // :deep()：脱壳。左侧带 scope，内部选择器作为穿透目标保持原样。
+  // 与顶层 transformSelector 的区别：左侧为空时不补 attr（父规则已提供作用域）。
+  const left = before.trimEnd();
+  const combinator = splitTrailingCombinator(left);
+
+  let scopedLeft;
+
+  if (combinator) {
+    scopedLeft =
+      `${addNestedScope(combinator.head, attrSelector)} ${combinator.combinator}`;
+  } else {
+    scopedLeft = left ? addNestedScope(left, attrSelector) : '';
+  }
+
+  return innerSelectors
+    .map((item) => `${scopedLeft} ${item}${tail}`.trim())
+    .join(', ');
+}
+
+function scopeNestedSelectorList(
+  selectorText,
+  attrSelector,
+  slottedAttrSelector = attrSelector,
+) {
+  // 保留 prelude 尾部空白，避免改写后选择器与 { 之间的格式噪音。
+  const trailing = selectorText.match(/\s*$/)[0];
+
+  return (
+    splitSelectors(selectorText)
+      .map((selector) =>
+        scopeNestedSelector(selector, attrSelector, slottedAttrSelector),
+      )
+      .join(', ') + trailing
+  );
 }
 
 // ---- CSS rule scanner ----
@@ -522,6 +691,59 @@ function findMatchingBrace(css, openIndex) {
   return result;
 }
 
+// 判断一条 statement 的 prelude 是否为 CSS 自定义属性声明（`--name: value`）。
+// 关键区别：自定义属性的值可以合法包含配对的花括号（规范里值是一串 token），
+// 例如 CSS-in-JS 主题对象 `--tokens: { color: red; }`。这些花括号属于值，
+// 不是规则体；若当规则递归解析，会把 `--tokens:` 误当选择器追加 scope。
+// 普通属性（如 `color`）的值不含花括号，不受此规则影响。
+//
+// 名称识别遵循 CSS <ident> 的常见形态：ASCII 字母数字、-、_，非 ASCII 字符，
+// 以及反斜杠转义（`\u00e9`、`\:` 等）。这是保守匹配而非完整 ident 解析器：
+// 名称必须紧跟 `--` 且非空、冒号前除空白外只能是上述字符。前置注释或
+// 其它装饰性内容不在识别范围内——这类 prelude 本就不会被当成规则体改写，
+// 交由下方通用分支原样保留即可，无需放宽此处正则。
+const CUSTOM_PROPERTY_NAME = '(?:[\\w\\u0080-\\uFFFF-]|\\\\(?:[0-9a-fA-F]{1,6}\\s?|.))';
+const CUSTOM_PROPERTY_DECL = new RegExp(
+  `^--${CUSTOM_PROPERTY_NAME}+\\s*:`,
+);
+function isCustomPropertyDeclaration(prelude) {
+  return CUSTOM_PROPERTY_DECL.test(prelude.trimStart());
+}
+
+// 找到自定义属性声明的结束位置：花括号可嵌套，只有回到最外层后遇到的 `;` 才结束声明；
+// 若值里没有花括号（如 `--x: red`），由 transformRules 的普通 `;` 分支处理。
+// 返回分号在 css 中的索引；找不到配对结构时返回 -1，交给调用方保留原文。
+function findCustomPropertyEnd(css, braceIndex) {
+  let curly = 0;
+  let afterOuterBrace = -1;
+  let result = -1;
+
+  // 花括号计数与分号终止判断分开处理：
+  // - curly 只数花括号（自定义属性值里函数/方括号内的花括号也算配对结构）；
+  // - 分号只有在 round/square/curly 均为 0（即真正的最外层）才结束声明。
+  // 必须显式传 trackDepth=true，否则 scanCss 回调的 round/square 恒为 0，
+  // 圆括号/方括号内的分号（如 fn(a; b)、[a; b]）会被当成声明结束符。
+  scanCss(css, braceIndex, (i, ch, round, square) => {
+    if (ch === '{') {
+      curly += 1;
+    } else if (ch === '}') {
+      curly -= 1;
+      if (curly < 0) {
+        // 遇到多余的 `}`（外层规则闭合）：声明无结尾分号，到此为止。
+        result = afterOuterBrace >= 0 ? afterOuterBrace : i;
+        return false;
+      }
+      if (curly === 0) afterOuterBrace = i + 1;
+    } else if (ch === ';' && round === 0 && square === 0 && curly === 0) {
+      result = i + 1;
+      return false;
+    }
+  }, true);
+
+  // 值里的花括号闭合后没有分号（声明块最后一项）时，退回到闭合括号之后。
+  return result >= 0 ? result : afterOuterBrace;
+}
+
 function getAtRuleName(prelude) {
   const match = prelude.trim().match(/^@([\w-]+)/);
 
@@ -535,12 +757,17 @@ function isKeyframesAtRule(name) {
   );
 }
 
-// 递归处理分组 at-rule；规则体内的 CSS nesting 不转换。
+// 递归处理分组 at-rule 与规则体内的 CSS nesting。
+// nested=false 处理顶层规则；true 表示 current css 是某条规则体的内容，
+// 其中的选择器按 CSS nesting 语义处理（scope 由父选择器继承）。
 function transformRules(
   css,
   attrSelector,
   slottedAttrSelector = attrSelector,
+  nested = false,
 ) {
+  const scopeList = nested ? scopeNestedSelectorList : scopeSelectorList;
+
   let output = '';
   let cursor = 0;
 
@@ -566,6 +793,20 @@ function transformRules(
       continue;
     }
 
+    // 自定义属性的值允许含配对花括号（`--x: { a: b; }`）。这里扫描到的 `{`
+    // 属于值而非规则体，整段声明原样保留，不递归、不加 scope。
+    // 否则会把 `--x:` 误当选择器、把值误当规则体（历史回归）。
+    if (isCustomPropertyDeclaration(prelude)) {
+      const declEnd = findCustomPropertyEnd(css, boundary.index);
+
+      if (declEnd > boundary.index) {
+        output += css.slice(start, declEnd);
+        cursor = declEnd;
+        continue;
+      }
+      // 配对失败时落到下方通用分支，按不完整 CSS 保留原文。
+    }
+
     const close = findMatchingBrace(css, boundary.index);
 
     if (close < 0) {
@@ -578,8 +819,9 @@ function transformRules(
     const atRule = getAtRuleName(prelude);
 
     if (GROUP_AT_RULES.has(atRule)) {
+      // 分组 at-rule 不改变 nesting 上下文，沿用当前的 nested 值。
       output +=
-        `${prelude}{${transformRules(body, attrSelector, slottedAttrSelector)}}`;
+        `${prelude}{${transformRules(body, attrSelector, slottedAttrSelector, nested)}}`;
     } else if (isKeyframesAtRule(atRule)) {
       // from / to / 百分比选择器不能添加作用域属性。
       output += `${prelude}{${body}}`;
@@ -587,8 +829,9 @@ function transformRules(
       // @font-face、@page、@property 等声明块不转换。
       output += `${prelude}{${body}}`;
     } else {
+      // 规则体交给下一层递归：声明原样保留，嵌套规则按 nesting 语义处理。
       output +=
-        `${scopeSelectorList(prelude, attrSelector, slottedAttrSelector)}{${body}}`;
+        `${scopeList(prelude, attrSelector, slottedAttrSelector)}{${transformRules(body, attrSelector, slottedAttrSelector, true)}}`;
     }
 
     cursor = close + 1;
@@ -815,7 +1058,18 @@ function isComponentRootOfParent(instance) {
   );
 }
 
-// Fragment 的唯一有效根；多根不继承根 scope，Symbol 类型的注释/文本节点不算。
+// Vue 3 里 Comment / Text / Fragment 的 type 都是 Symbol，不能一律过滤。
+// 结构差异：Fragment 的 children 是 VNode 数组；Comment / Text 的 children 是字符串。
+// 只按 type 是否 Symbol 判断会把嵌套 Fragment 一并丢掉，导致唯一根识别失败。
+function isFragmentVNode(vnode) {
+  return Boolean(vnode) &&
+    typeof vnode === 'object' &&
+    typeof vnode.type === 'symbol' &&
+    Array.isArray(vnode.children);
+}
+
+// Fragment 的唯一有效根；多根不继承根 scope，Comment / Text 等符号节点不算。
+// Fragment 本身递归下钻，因此嵌套 Fragment（<><><span/></></>）也能找到唯一根。
 function getSingleRootVNode(vnode) {
   if (!vnode || typeof vnode !== 'object') {
     return null;
@@ -836,8 +1090,12 @@ function getSingleRootVNode(vnode) {
   const meaningful = children.filter((child) => {
     if (!child || typeof child !== 'object') return false;
 
-    // Vue 3 的 Comment / Text / 内层 Fragment 等 VNode 的 type 是 Symbol。
-    return typeof child.type !== 'symbol';
+    // Fragment 递归下钻；Comment / Text 等符号节点（children 非数组）跳过。
+    if (typeof child.type === 'symbol') {
+      return isFragmentVNode(child);
+    }
+
+    return true;
   });
 
   if (meaningful.length !== 1) {

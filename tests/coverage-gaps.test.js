@@ -275,6 +275,54 @@ test('多根 Fragment 不继承父组件 scope', () => {
   assert.equal(childEl2.hasAttribute(parentAttr), false);
 });
 
+test('嵌套 Fragment 的单根仍能继承父组件 scope', () => {
+  const parentEl = document.createElement('div');
+  const grandRootEl = document.createElement('i');
+  const commentNode = document.createComment('anchor');
+
+  const parentOptions = { name: 'P', styles: '<style scoped>.p{}</style>' };
+  const parentInternal = { type: parentOptions, subTree: null };
+  const parentVm = { $options: parentOptions, $: parentInternal, $el: parentEl };
+  parentInternal.proxy = parentVm;
+
+  const childOptions = { name: 'C', styles: '<style scoped>.c{}</style>' };
+  const childInternal = { type: childOptions, parent: parentInternal, subTree: null };
+  const childVm = { $options: childOptions, $: childInternal, $el: grandRootEl };
+  childInternal.proxy = childVm;
+
+  styleMixin.created.call(parentVm);
+  styleMixin.created.call(childVm);
+
+  const parentStyle = headNodes().find((node) => node.textContent.includes('.p'));
+  const parentAttr = `data-scope-${parentStyle.className}`;
+
+  parentInternal.subTree = {
+    type: 'div',
+    ctx: parentInternal,
+    el: parentEl,
+    children: [{ type: { name: 'Child' }, component: childInternal, el: grandRootEl }],
+  };
+  // 外层 Fragment → 内层 Fragment → (注释 + 唯一元素根)，必须递归下钻找到 grandRootEl。
+  childInternal.subTree = {
+    type: Symbol.for('v-fgt'),
+    children: [
+      {
+        type: Symbol.for('v-fgt'),
+        children: [
+          { type: Symbol.for('v-cmt'), el: commentNode, children: '' },
+          { type: 'i', ctx: childInternal, el: grandRootEl, children: [] },
+        ],
+      },
+    ],
+  };
+
+  styleMixin.mounted.call(parentVm);
+
+  assert.equal(parentEl.hasAttribute(parentAttr), true);
+  assert.equal(grandRootEl.hasAttribute(parentAttr), true);
+  assert.equal(commentNode.attrs, undefined);
+});
+
 test('注释与引号内的逗号、括号不参与切分与识别', () => {
   assert.equal(
     scopeCss('.a/* c */, .b { }'),
