@@ -6,8 +6,21 @@
 * 改写普通选择器与 :deep() / :slotted() / :global()、历史 /deep/ 与 >>>，
 * 递归处理分组 at-rule、跳过 keyframes，扫描时感知字符串、注释、括号与转义。
 *
-* 不替代 @vue/compiler-sfc，不转换规则体内的 CSS nesting；
+* 不替代 @vue/compiler-sfc；规则体内的 CSS nesting 会就地处理：特殊伪类脱壳、
+* 普通嵌套选择器追加 scope、& 主导的复合沿用父作用域；
 * styles 为组件定义级静态配置，实例运行期修改不生效。
+*
+* 设计边界（供静态审查参考）：
+* 1. 这是一个选择器改写器，不是 CSS 解析器。递归只用于分组 at-rule 与规则体
+*    nesting；自定义属性值里允许出现配对花括号，遇到时整段原样保留（见
+*    isCustomPropertyDeclaration / findCustomPropertyEnd），不当作规则体。
+* 2. 作用域采用"给每个目标复合选择器追加属性"的策略，不做祖先限定；
+*    nesting 中内层选择器同样追加 scope，避免穿透命中未标记的后代元素。
+*    该策略仅针对普通选择器；:slotted()/:global() 的左侧刻意不加 scope，
+*    :deep() 只作用域化左侧——与 Vue 官方编译器语义一致（见 nesting helpers）。
+* 3. :deep() / :slotted() / :global() 是编译期伪类，浏览器不识别，必须全部
+*    脱壳——残留任意一个都会导致整条规则被浏览器丢弃。脱壳同时覆盖串联、
+*    参数内部嵌套（:deep(:global(.x))）两种形态，由 unwrapSpecialText 递归完成。
 */
 var styleCounterName = "data-vue-component-instances";
 var scopePrefix = "data-scope-";
@@ -245,8 +258,20 @@ function splitTrailingCombinator(selector) {
 		combinator
 	};
 }
-function transformSelector(selector, attrSelector, slottedAttrSelector, depth = 0) {
-	if (depth > 32) return addScopeAttr(selector, attrSelector);
+function unwrapSpecialText(text, slottedAttrSelector, depth = 0) {
+	if (depth > 32) return text;
+	const special = findSpecialPseudo(text, [
+		"deep",
+		"slotted",
+		"global"
+	]);
+	if (!special) return text;
+	const before = text.slice(0, special.start);
+	const inner = text.slice(special.open + 1, special.close);
+	const rest = text.slice(special.close + 1);
+	return `${before}${splitSelectors(inner).flatMap((item) => splitSelectors(unwrapSpecialText(item, slottedAttrSelector, depth + 1))).map((item) => special.name === "slotted" ? addScopeAttr(item, slottedAttrSelector) : item).join(", ")}` + unwrapSpecialText(rest, slottedAttrSelector, depth + 1);
+}
+function transformSelector(selector, attrSelector, slottedAttrSelector) {
 	const special = findSpecialPseudo(selector, [
 		"deep",
 		"slotted",
@@ -255,19 +280,19 @@ function transformSelector(selector, attrSelector, slottedAttrSelector, depth = 
 	if (!special) return addScopeAttr(selector, attrSelector);
 	const before = selector.slice(0, special.start);
 	const inner = selector.slice(special.open + 1, special.close);
-	const after = selector.slice(special.close + 1);
-	const innerSelectors = splitSelectors(inner);
-	if (special.name === "global") return innerSelectors.map((item) => `${before}${item}${after}`).join(", ");
+	const tail = unwrapSpecialText(selector.slice(special.close + 1), slottedAttrSelector);
+	const innerSelectors = splitSelectors(inner).flatMap((item) => splitSelectors(unwrapSpecialText(item, slottedAttrSelector)));
+	if (special.name === "global") return innerSelectors.map((item) => `${before}${item}${tail}`).join(", ");
 	if (special.name === "slotted") return innerSelectors.map((item) => {
 		const slotted = addScopeAttr(item, slottedAttrSelector);
-		return `${before}${slotted}${after}`;
+		return `${before}${slotted}${tail}`;
 	}).join(", ");
 	const left = before.trimEnd();
 	const combinator = splitTrailingCombinator(left);
 	let scopedLeft;
 	if (combinator) scopedLeft = `${addScopeAttr(combinator.head, attrSelector)} ${combinator.combinator}`;
 	else scopedLeft = left ? addScopeAttr(left, attrSelector) : attrSelector;
-	return innerSelectors.map((item) => `${scopedLeft} ${item}${after}`.trim()).join(", ");
+	return innerSelectors.map((item) => `${scopedLeft} ${item}${tail}`.trim()).join(", ");
 }
 function scopeSelector(selector, attrSelector, slottedAttrSelector = attrSelector) {
 	const value = normalizeLegacyDeep(selector.trim());
@@ -276,6 +301,45 @@ function scopeSelector(selector, attrSelector, slottedAttrSelector = attrSelecto
 }
 function scopeSelectorList(selectorText, attrSelector, slottedAttrSelector = attrSelector) {
 	return splitSelectors(selectorText).map((selector) => scopeSelector(selector, attrSelector, slottedAttrSelector)).join(", ");
+}
+function addNestedScope(selector, attrSelector) {
+	const value = selector.trim();
+	if (!value) return value;
+	let lastStart = 0;
+	scanCss(value, 0, (i, ch, round, square) => {
+		if (round === 0 && square === 0 && (ch === ">" || ch === "+" || ch === "~" || /\s/.test(ch))) lastStart = i + 1;
+	}, true);
+	if (value.slice(lastStart).trimStart().startsWith("&")) return value;
+	return addScopeAttr(value, attrSelector);
+}
+function scopeNestedSelector(selector, attrSelector, slottedAttrSelector = attrSelector) {
+	const value = normalizeLegacyDeep(selector.trim());
+	if (!value) return value;
+	const special = findSpecialPseudo(value, [
+		"deep",
+		"slotted",
+		"global"
+	]);
+	if (!special) return addNestedScope(value, attrSelector);
+	const before = value.slice(0, special.start);
+	const inner = value.slice(special.open + 1, special.close);
+	const tail = unwrapSpecialText(value.slice(special.close + 1), slottedAttrSelector);
+	const innerSelectors = splitSelectors(inner).flatMap((item) => splitSelectors(unwrapSpecialText(item, slottedAttrSelector)));
+	if (special.name === "global") return innerSelectors.map((item) => `${before}${item}${tail}`).join(", ");
+	if (special.name === "slotted") return innerSelectors.map((item) => {
+		const slotted = addScopeAttr(item, slottedAttrSelector);
+		return `${before}${slotted}${tail}`;
+	}).join(", ");
+	const left = before.trimEnd();
+	const combinator = splitTrailingCombinator(left);
+	let scopedLeft;
+	if (combinator) scopedLeft = `${addNestedScope(combinator.head, attrSelector)} ${combinator.combinator}`;
+	else scopedLeft = left ? addNestedScope(left, attrSelector) : "";
+	return innerSelectors.map((item) => `${scopedLeft} ${item}${tail}`.trim()).join(", ");
+}
+function scopeNestedSelectorList(selectorText, attrSelector, slottedAttrSelector = attrSelector) {
+	const trailing = selectorText.match(/\s*$/)[0];
+	return splitSelectors(selectorText).map((selector) => scopeNestedSelector(selector, attrSelector, slottedAttrSelector)).join(", ") + trailing;
 }
 function scanRuleBoundary(css, start) {
 	let result = null;
@@ -308,6 +372,30 @@ function findMatchingBrace(css, openIndex) {
 	});
 	return result;
 }
+var CUSTOM_PROPERTY_DECL = new RegExp(`^--(?:[\\w\\u0080-\\uFFFF-]|\\\\(?:[0-9a-fA-F]{1,6}\\s?|.))+\\s*:`);
+function isCustomPropertyDeclaration(prelude) {
+	return CUSTOM_PROPERTY_DECL.test(prelude.trimStart());
+}
+function findCustomPropertyEnd(css, braceIndex) {
+	let curly = 0;
+	let afterOuterBrace = -1;
+	let result = -1;
+	scanCss(css, braceIndex, (i, ch, round, square) => {
+		if (ch === "{") curly += 1;
+		else if (ch === "}") {
+			curly -= 1;
+			if (curly < 0) {
+				result = afterOuterBrace >= 0 ? afterOuterBrace : i;
+				return false;
+			}
+			if (curly === 0) afterOuterBrace = i + 1;
+		} else if (ch === ";" && round === 0 && square === 0 && curly === 0) {
+			result = i + 1;
+			return false;
+		}
+	}, true);
+	return result >= 0 ? result : afterOuterBrace;
+}
 function getAtRuleName(prelude) {
 	const match = prelude.trim().match(/^@([\w-]+)/);
 	return match ? `@${match[1].toLowerCase()}` : "";
@@ -315,7 +403,8 @@ function getAtRuleName(prelude) {
 function isKeyframesAtRule(name) {
 	return KEYFRAMES_AT_RULES.has(name) || /^@-[\w]+-keyframes$/.test(name);
 }
-function transformRules(css, attrSelector, slottedAttrSelector = attrSelector) {
+function transformRules(css, attrSelector, slottedAttrSelector = attrSelector, nested = false) {
+	const scopeList = nested ? scopeNestedSelectorList : scopeSelectorList;
 	let output = "";
 	let cursor = 0;
 	while (cursor < css.length) {
@@ -333,6 +422,14 @@ function transformRules(css, attrSelector, slottedAttrSelector = attrSelector) {
 			cursor = boundary.index + 1;
 			continue;
 		}
+		if (isCustomPropertyDeclaration(prelude)) {
+			const declEnd = findCustomPropertyEnd(css, boundary.index);
+			if (declEnd > boundary.index) {
+				output += css.slice(start, declEnd);
+				cursor = declEnd;
+				continue;
+			}
+		}
 		const close = findMatchingBrace(css, boundary.index);
 		if (close < 0) {
 			output += css.slice(start);
@@ -340,10 +437,10 @@ function transformRules(css, attrSelector, slottedAttrSelector = attrSelector) {
 		}
 		const body = css.slice(boundary.index + 1, close);
 		const atRule = getAtRuleName(prelude);
-		if (GROUP_AT_RULES.has(atRule)) output += `${prelude}{${transformRules(body, attrSelector, slottedAttrSelector)}}`;
+		if (GROUP_AT_RULES.has(atRule)) output += `${prelude}{${transformRules(body, attrSelector, slottedAttrSelector, nested)}}`;
 		else if (isKeyframesAtRule(atRule)) output += `${prelude}{${body}}`;
 		else if (prelude.trimStart().startsWith("@")) output += `${prelude}{${body}}`;
-		else output += `${scopeSelectorList(prelude, attrSelector, slottedAttrSelector)}{${body}}`;
+		else output += `${scopeList(prelude, attrSelector, slottedAttrSelector)}{${transformRules(body, attrSelector, slottedAttrSelector, true)}}`;
 		cursor = close + 1;
 	}
 	return output;
@@ -471,13 +568,17 @@ function isComponentRootOfParent(instance) {
 	const parentTree = getRenderTree(parent);
 	return Boolean(componentVNode && parentTree && componentVNode === parentTree);
 }
+function isFragmentVNode(vnode) {
+	return Boolean(vnode) && typeof vnode === "object" && typeof vnode.type === "symbol" && Array.isArray(vnode.children);
+}
 function getSingleRootVNode(vnode) {
 	if (!vnode || typeof vnode !== "object") return null;
 	if (isElementVNode(vnode)) return vnode;
 	if (vnode.component) return getSingleRootVNode(getRenderTree(vnode.component));
 	const meaningful = (Array.isArray(vnode.children) ? vnode.children : []).filter((child) => {
 		if (!child || typeof child !== "object") return false;
-		return typeof child.type !== "symbol";
+		if (typeof child.type === "symbol") return isFragmentVNode(child);
+		return true;
 	});
 	if (meaningful.length !== 1) return null;
 	return getSingleRootVNode(meaningful[0]);
